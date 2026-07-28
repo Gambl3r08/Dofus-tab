@@ -42,6 +42,26 @@ pub fn detect_window_manager() -> Result<Box<dyn WindowManager>> {
     ))
 }
 
+/// Connects to the global hotkey provider for the current session.
+#[cfg(target_os = "linux")]
+pub fn detect_hotkey_manager() -> Result<Box<dyn dofus_core::hotkey::HotkeyManager>> {
+    let portal = linux::portal::PortalHotkeys::connect().map_err(|error| {
+        dofus_core::Error::NoBackend(format!(
+            "the XDG GlobalShortcuts portal is unavailable ({error}); \
+             KDE Plasma implements it, GNOME and wlroots may not"
+        ))
+    })?;
+    Ok(Box::new(portal))
+}
+
+/// Connects to the global hotkey provider for the current session.
+#[cfg(not(target_os = "linux"))]
+pub fn detect_hotkey_manager() -> Result<Box<dyn dofus_core::hotkey::HotkeyManager>> {
+    Err(dofus_core::Error::Unsupported(
+        "global hotkeys on this operating system",
+    ))
+}
+
 /// Returns the process inspector for the current OS.
 pub fn process_inspector() -> impl ProcessInspector {
     process::OsProcessInspector

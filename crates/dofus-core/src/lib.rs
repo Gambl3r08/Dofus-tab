@@ -11,6 +11,7 @@
 pub mod account;
 pub mod config;
 pub mod error;
+pub mod hotkey;
 pub mod identity;
 pub mod launcher;
 pub mod registry;

@@ -47,6 +47,9 @@ enum Command {
     /// Persist the current tab order so it survives restarts.
     Save,
 
+    /// Register the global hotkeys and switch tabs until interrupted.
+    Daemon,
+
     /// Report what the platform layer detects, for troubleshooting.
     Doctor,
 }
@@ -60,6 +63,7 @@ fn main() -> Result<()> {
         Command::Focus { target } => commands::focus(&target),
         Command::Label { slot, label } => commands::label(slot, &label),
         Command::Save => commands::save_order(),
+        Command::Daemon => commands::daemon(),
         Command::Doctor => commands::doctor(),
     }
 }

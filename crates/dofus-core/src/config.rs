@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::AccountId;
 use crate::error::{Error, Result};
+use crate::hotkey;
 
 /// User preferences, stored as JSON next to the platform config directory.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -19,6 +20,13 @@ pub struct Config {
     pub labels: BTreeMap<u64, String>,
     /// Preferred tab order. Accounts absent from this list are appended.
     pub order: Vec<u64>,
+    /// Custom hotkey triggers, keyed by 1-based slot.
+    ///
+    /// Slots absent from this map use `Alt+<slot>`. Values use the freedesktop
+    /// shortcuts syntax, e.g. `CTRL+SHIFT+F2`.
+    pub hotkeys: BTreeMap<u32, String>,
+    /// How many slots get a hotkey. Defaults to [`hotkey::DEFAULT_MAX_SLOTS`].
+    pub max_slots: Option<u32>,
 }
 
 impl Config {
@@ -77,6 +85,14 @@ impl Config {
     pub fn set_order(&mut self, ids: impl IntoIterator<Item = AccountId>) {
         self.order = ids.into_iter().map(|id| id.0).collect();
     }
+
+    /// Hotkey bindings to register, defaults merged with the user's overrides.
+    pub fn hotkey_bindings(&self) -> Vec<hotkey::HotkeyBinding> {
+        hotkey::bindings(
+            self.max_slots.unwrap_or(hotkey::DEFAULT_MAX_SLOTS),
+            &self.hotkeys,
+        )
+    }
 }
 
 /// Default location of the Dofus-tab config file for this OS.
@@ -130,5 +146,31 @@ mod tests {
         let config: Config = serde_json::from_str("{}").expect("should deserialize");
         assert!(config.labels.is_empty());
         assert!(config.order.is_empty());
+        assert!(config.hotkeys.is_empty());
+        assert_eq!(config.max_slots, None);
+    }
+
+    #[test]
+    fn a_default_config_binds_alt_plus_digit_for_every_slot() {
+        let bindings = Config::default().hotkey_bindings();
+
+        assert_eq!(bindings.len() as u32, hotkey::DEFAULT_MAX_SLOTS);
+        assert_eq!(bindings[0].trigger, "ALT+1");
+        assert_eq!(bindings[0].action, hotkey::Action::FocusSlot(1));
+    }
+
+    #[test]
+    fn hotkey_overrides_and_slot_count_are_honoured() {
+        let config = Config {
+            max_slots: Some(2),
+            hotkeys: BTreeMap::from([(2, "CTRL+F2".to_string())]),
+            ..Config::default()
+        };
+
+        let bindings = config.hotkey_bindings();
+
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].trigger, "ALT+1");
+        assert_eq!(bindings[1].trigger, "CTRL+F2");
     }
 }

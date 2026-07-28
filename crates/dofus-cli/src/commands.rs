@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result, bail};
 use dofus_core::config::{self, Config};
+use dofus_core::hotkey;
 use dofus_core::launcher::{self, AccountDirectory};
 use dofus_core::registry::{self, Tab};
 
@@ -140,6 +141,88 @@ pub fn save_order() -> Result<()> {
     Ok(())
 }
 
+/// Registers the global hotkeys and focuses tabs until interrupted.
+pub fn daemon() -> Result<()> {
+    let config = Config::load().context("could not read the Dofus-tab config")?;
+    let bindings = config.hotkey_bindings();
+    if bindings.is_empty() {
+        bail!("no hotkeys configured");
+    }
+
+    let mut hotkeys =
+        dofus_platform::detect_hotkey_manager().context("could not reach a hotkey provider")?;
+
+    println!("Registering {} shortcuts:", bindings.len());
+    for binding in &bindings {
+        println!("  {:<12} {}", binding.trigger, binding.description);
+    }
+    println!("Your desktop may ask you to confirm them the first time.");
+
+    hotkeys
+        .bind(&bindings)
+        .context("could not register the global shortcuts")?;
+
+    report_inert_shortcuts(hotkeys.as_mut());
+
+    println!("Listening. Press Ctrl+C to stop.");
+
+    // Rescan on every activation rather than caching: a scan costs a few
+    // milliseconds and it is always right, even if a client was just launched
+    // or closed.
+    hotkeys
+        .listen(&mut |action| {
+            let hotkey::Action::FocusSlot(slot) = action;
+            if let Err(error) = focus_slot(slot) {
+                eprintln!("Could not focus slot {slot}: {error:#}");
+            }
+        })
+        .context("the hotkey listener stopped")
+}
+
+/// Warns about shortcuts the desktop accepted but left without a key.
+///
+/// This failure mode is silent otherwise: registration succeeds, nothing is
+/// logged, and the hotkeys simply never fire. KDE does exactly this when a
+/// previous permission prompt was dismissed.
+fn report_inert_shortcuts(hotkeys: &mut dyn hotkey::HotkeyManager) {
+    let registered = match hotkeys.registered() {
+        Ok(registered) => registered,
+        Err(error) => {
+            tracing::debug!(%error, "could not list the registered shortcuts");
+            return;
+        }
+    };
+
+    let inert: Vec<_> = registered.iter().filter(|s| !s.is_active()).collect();
+    if inert.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "\nWarning: your desktop registered {} of {} shortcuts without a key, so they will \
+         not fire.",
+        inert.len(),
+        registered.len()
+    );
+    eprintln!("Assign them in your desktop's keyboard shortcut settings, under Dofus-tab.");
+}
+
+/// Focuses the tab in `slot`, doing nothing when no client occupies it.
+fn focus_slot(slot: u32) -> Result<()> {
+    let (tabs, _, _) = scan()?;
+
+    let Some(tab) = tabs.iter().find(|tab| tab.slot == slot) else {
+        tracing::debug!(slot, "no window in this slot");
+        return Ok(());
+    };
+
+    let mut manager = dofus_platform::detect_window_manager()?;
+    manager.focus(tab.window)?;
+
+    println!("Focused {} ({})", tab.label, tab.window);
+    Ok(())
+}
+
 pub fn doctor() -> Result<()> {
     println!("== Dofus-tab doctor ==");
 
@@ -186,5 +269,44 @@ pub fn doctor() -> Result<()> {
         None => println!("dofus-tab config  : no config directory for this OS"),
     }
 
+    report_hotkey_state();
+
     Ok(())
+}
+
+/// Reports what the desktop assigned to each shortcut.
+///
+/// Shortcuts are only visible once `daemon` has registered them at least once,
+/// so an empty list here means "not registered yet", not "broken".
+fn report_hotkey_state() {
+    let mut hotkeys = match dofus_platform::detect_hotkey_manager() {
+        Ok(hotkeys) => hotkeys,
+        Err(error) => {
+            println!("hotkey provider   : unavailable ({error})");
+            return;
+        }
+    };
+
+    println!("hotkey provider   : available");
+
+    match hotkeys.registered() {
+        Ok(registered) if registered.is_empty() => {
+            println!("hotkeys           : none registered yet, run `dofus-tab daemon`");
+        }
+        Ok(registered) => {
+            for shortcut in &registered {
+                let trigger = shortcut.trigger.as_deref().unwrap_or("NOT ASSIGNED");
+                println!("  {:<16} {}", shortcut.action.id(), trigger);
+            }
+            let inert = registered.iter().filter(|s| !s.is_active()).count();
+            if inert > 0 {
+                println!(
+                    "hotkeys           : {inert} of {} have no key; assign them in your \
+                     desktop's shortcut settings",
+                    registered.len()
+                );
+            }
+        }
+        Err(error) => println!("hotkeys           : could not list them ({error})"),
+    }
 }

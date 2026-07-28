@@ -6,9 +6,9 @@ It maps every running Dofus client to a numbered tab and lets you jump between
 them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
-> **Status:** v0. The command line interface and the Linux/X11 backend work
-> end to end. The overlay GUI, global hotkeys, and the Windows and macOS
-> backends are not implemented yet — see [Roadmap](#roadmap).
+> **Status:** v0. The command line interface, the Linux/X11 backend and global
+> hotkeys work end to end. The overlay GUI and the Windows and macOS backends
+> are not implemented yet — see [Roadmap](#roadmap).
 
 ## Scope
 
@@ -34,6 +34,7 @@ dofus-tab focus 2          # focus a tab by slot
 dofus-tab focus enutrof    # ...or by part of its label
 dofus-tab label 1 "Iop"    # rename a tab (empty string restores the nickname)
 dofus-tab save             # persist the current order across restarts
+dofus-tab daemon           # register the global hotkeys and listen
 dofus-tab doctor           # report what the platform layer detects
 ```
 
@@ -44,6 +45,73 @@ $ dofus-tab list
   1  someone#1546                  account=62833850     pid=11825    window=0x220000a
   2  Iop                           account=62845763     pid=12904    window=0x2400012
 ```
+
+## Global hotkeys
+
+`dofus-tab daemon` registers `Alt+1` … `Alt+8` and focuses the matching tab,
+whichever window currently has focus.
+
+Hotkeys are bound to **slots, not accounts**: `Alt+1` always focuses whatever is
+in the first tab. That keeps muscle memory stable when an account is not logged
+in, and it is what the portal requires — bindings are registered once, up front,
+and cannot follow a changing window count. A fixed pool of eight is therefore
+registered regardless of how many clients run; pressing a hotkey for an empty
+slot does nothing.
+
+Customise them in the config file (`~/.config/dofus-tab/config.json` on Linux):
+
+```json
+{
+  "max_slots": 4,
+  "hotkeys": {
+    "1": "CTRL+F1",
+    "2": "CTRL+F2"
+  }
+}
+```
+
+Triggers use the freedesktop shortcuts syntax (`ALT`, `CTRL`, `SHIFT`, `LOGO`,
+joined with `+`). They are *preferred* triggers: the desktop may reassign one
+that clashes with an existing shortcut, and the user can always change it
+afterwards from their system settings.
+
+### Why the portal, and not `XGrabKey`
+
+An X11 key grab only fires while focus sits in an X11 or XWayland client. Dofus
+is one, but a browser or chat client on a Wayland session is not, so a grab
+would silently stop working depending on which window is focused. The XDG
+`GlobalShortcuts` portal has no such blind spot.
+
+The trade-off is desktop support: KDE Plasma implements the portal, GNOME's
+support has lagged, and `xdg-desktop-portal-wlr` ships no implementation at all.
+Hyprland and Sway will need their own IPC-based fallback.
+
+### Troubleshooting: registered but inert
+
+The desktop asks for confirmation the first time shortcuts are registered.
+Declining that prompt puts KDE into a state worth knowing about:
+
+- `BindShortcuts` fails immediately with portal response code 1.
+- The shortcuts are nevertheless recorded, with the preferred trigger as their
+  *default* and **no active key** (`focus-slot-1=none,Alt+1,…` in
+  `kglobalshortcutsrc`).
+- Later runs succeed without prompting again, because the entries already
+  exist — so registration reports success while nothing ever fires.
+
+`dofus-tab doctor` exists to make that visible: it calls `ListShortcuts` and
+prints the trigger the desktop actually assigned to each action, flagging any
+that read `NOT ASSIGNED`. `dofus-tab daemon` prints the same warning at startup.
+
+The fix is to assign the keys once from the desktop's keyboard shortcut
+settings. Deleting the `focus-slot-*` lines from `kglobalshortcutsrc` is not
+enough on its own, and `kglobalaccel`'s `setShortcut` D-Bus method refuses to
+assign keys to portal-owned actions.
+
+> **Packaging note.** The portal derives the application identity from the
+> systemd scope of the calling process, so running `dofus-tab daemon` from a
+> terminal registers the shortcuts under *that terminal's* name in the desktop
+> shortcut settings. Launching it from an installed `.desktop` file or a systemd
+> user unit gives it its own identity.
 
 ## How accounts are identified
 
@@ -89,6 +157,7 @@ crates/
     registry.rs       windows + identity + config -> ordered tabs
   dofus-platform/   OS adapters implementing the ports
     linux/x11.rs      EWMH backend (X11 sessions and XWayland clients)
+    linux/portal.rs   global hotkeys via the XDG GlobalShortcuts portal
     process.rs        reading another process' command line
   dofus-cli/        the v0 user interface
 ```
@@ -140,7 +209,8 @@ All code, comments, documentation and tests are written in English.
 - [x] `dofus-core` domain model with account identity and stable ordering
 - [x] Linux EWMH backend (X11 and XWayland)
 - [x] `dofus-tab` command line interface
-- [ ] Global hotkeys via the XDG `GlobalShortcuts` portal
+- [x] Global hotkeys via the XDG `GlobalShortcuts` portal
+- [ ] `.desktop` file and systemd user unit, so the portal sees our own app id
 - [ ] Always-on-top overlay bar
 - [ ] Windows backend (Win32)
 - [ ] macOS backend (Accessibility API)

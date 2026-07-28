@@ -12,4 +12,6 @@ dofus-core.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
+serde.workspace = true
 x11rb.workspace = true
+zbus.workspace = true
