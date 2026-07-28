@@ -20,7 +20,7 @@ use dofus_core::config::Config;
 use dofus_core::layout::{self, Orientation};
 use eframe::egui;
 
-use crate::engine::{Command, EngineHandle};
+use crate::engine::{Command, EngineHandle, HotkeySession};
 use crate::settings::{SettingsWindow, TabRow};
 use crate::tray::{TrayCommand, TrayHandle};
 
@@ -41,6 +41,11 @@ const EMPTY_WIDTH: f32 = 220.0;
 /// Saving on every frame of a drag would hammer the disk; saving only on exit
 /// would lose the position whenever the process is killed rather than quit.
 const POSITION_SETTLE: Duration = Duration::from_millis(800);
+/// How often the bar wakes up to check for hotkey activations.
+///
+/// Short enough that a keypress feels instant, long enough that an idle bar
+/// costs nothing.
+const HOTKEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 
 /// Height of the window before the first layout pass.
 pub const INITIAL_HEIGHT: f32 = BUTTON_HEIGHT + MARGIN * 2.0;
@@ -66,13 +71,23 @@ pub struct BarApp {
     moved_at: Option<Instant>,
     /// `None` when the desktop offers no system tray.
     tray: Option<TrayHandle>,
+    /// `None` when the hotkeys could not be registered.
+    ///
+    /// Polled from here rather than from a worker thread because macOS only
+    /// delivers them to the thread running the event loop.
+    hotkeys: Option<HotkeySession>,
     settings: SettingsWindow,
     /// Whether the bar itself is shown; toggled from the tray.
     visible: bool,
 }
 
 impl BarApp {
-    pub fn new(engine: EngineHandle, config: Config, tray: Option<TrayHandle>) -> Self {
+    pub fn new(
+        engine: EngineHandle,
+        config: Config,
+        tray: Option<TrayHandle>,
+        hotkeys: Option<HotkeySession>,
+    ) -> Self {
         let (orientation, wrap_at) = config.overlay_layout();
         Self {
             engine,
@@ -83,9 +98,26 @@ impl BarApp {
             position: None,
             moved_at: None,
             tray,
+            hotkeys,
             settings: SettingsWindow::default(),
             visible: true,
         }
+    }
+
+    /// Turns hotkey activations into focus commands.
+    fn handle_hotkeys(&mut self, ctx: &egui::Context) {
+        let Some(hotkeys) = &mut self.hotkeys else {
+            return;
+        };
+
+        for slot in hotkeys.poll() {
+            tracing::info!(slot, "hotkey activated");
+            self.engine.send(Command::Focus(slot));
+        }
+
+        // Nothing else wakes the UI when a hotkey fires while the bar is idle,
+        // so keep a slow heartbeat going.
+        ctx.request_repaint_after(HOTKEY_POLL_INTERVAL);
     }
 
     /// Applies whatever the user picked from the tray menu.
@@ -100,8 +132,13 @@ impl BarApp {
                     // Seed both lists on open: the engine only learns the
                     // shortcuts once registration has happened, and the tabs
                     // change as clients come and go.
-                    let (shortcuts, tabs) = self.engine.with_state(|state| {
-                        let tabs = state
+                    let shortcuts = self
+                        .hotkeys
+                        .as_mut()
+                        .map(HotkeySession::registered)
+                        .unwrap_or_default();
+                    let tabs = self.engine.with_state(|state| {
+                        state
                             .tabs
                             .iter()
                             .filter_map(|tab| {
@@ -110,8 +147,7 @@ impl BarApp {
                                     label: tab.label.clone(),
                                 })
                             })
-                            .collect();
-                        (state.shortcuts.clone(), tabs)
+                            .collect()
                     });
                     self.settings.set_shortcuts(shortcuts);
                     self.settings.set_tabs(tabs);
@@ -268,6 +304,7 @@ impl eframe::App for BarApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_hotkeys(ctx);
         self.handle_tray(ctx);
 
         let outcome = self.settings.show(ctx, &mut self.config);

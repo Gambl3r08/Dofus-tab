@@ -22,6 +22,7 @@ sysinfo = { version = "0.36.1", default-features = false, features = ["system"] 
 windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+global-hotkey = "0.8.0"
 objc2 = "0.6.4"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "libc", "NSRunningApplication", "NSWorkspace"] }
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSURL", "NSArray", "NSEnumerator"] }

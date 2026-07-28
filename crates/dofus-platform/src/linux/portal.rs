@@ -31,6 +31,7 @@
 //! Reference: <https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.GlobalShortcuts.html>
 
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver};
 
 use dofus_core::hotkey::{Action, HotkeyBinding, HotkeyManager, RegisteredShortcut};
 use dofus_core::{Error, Result};
@@ -60,6 +61,8 @@ pub struct PortalHotkeys {
     session: OwnedObjectPath,
     /// Incremented so every request gets a distinct object path.
     request_counter: u32,
+    /// Fed by the listener thread once `bind` has succeeded.
+    activations: Option<Receiver<Action>>,
 }
 
 impl PortalHotkeys {
@@ -70,6 +73,7 @@ impl PortalHotkeys {
             connection,
             session: default_session_path(),
             request_counter: 0,
+            activations: None,
         };
         backend.session = backend.create_session()?;
         Ok(backend)
@@ -212,7 +216,7 @@ impl HotkeyManager for PortalHotkeys {
         self.call_and_wait("BindShortcuts", &body, request_path)?;
 
         tracing::debug!(count = bindings.len(), "bound global shortcuts");
-        Ok(())
+        self.start_listener()
     }
 
     fn registered(&mut self) -> Result<Vec<RegisteredShortcut>> {
@@ -248,38 +252,83 @@ impl HotkeyManager for PortalHotkeys {
         Ok(registered)
     }
 
-    fn listen(&mut self, on_activated: &mut dyn FnMut(Action)) -> Result<()> {
-        let portal = self.portal()?;
-        let activations = portal.receive_signal("Activated").map_err(portal_error)?;
-
-        for message in activations {
-            let (session, shortcut_id, _timestamp, _options): (
-                OwnedObjectPath,
-                String,
-                u64,
-                HashMap<String, OwnedValue>,
-            ) = match message.body().deserialize() {
-                Ok(body) => body,
-                Err(error) => {
-                    tracing::debug!(%error, "ignoring an unparseable Activated signal");
-                    continue;
-                }
-            };
-
-            // The bus delivers signals for every session on this connection.
-            if session != self.session {
-                continue;
-            }
-
-            match Action::from_id(&shortcut_id) {
-                Some(action) => on_activated(action),
-                None => tracing::debug!(shortcut_id, "ignoring an unknown shortcut"),
-            }
+    fn poll(&mut self) -> Vec<Action> {
+        match &self.activations {
+            Some(activations) => activations.try_iter().collect(),
+            None => Vec::new(),
         }
+    }
+}
 
-        Err(Error::Backend(
-            "the portal stopped delivering shortcut activations".to_string(),
-        ))
+impl PortalHotkeys {
+    /// Starts the thread that turns `Activated` signals into actions.
+    ///
+    /// The signal stream is blocking, so it gets a thread of its own; the
+    /// caller only ever drains a channel.
+    fn start_listener(&mut self) -> Result<()> {
+        let connection = self.connection.clone();
+        let session = self.session.clone();
+        let (sender, receiver) = mpsc::channel();
+
+        std::thread::Builder::new()
+            .name("dofus-tab-portal".to_string())
+            .spawn(move || {
+                let proxy = match Proxy::new(
+                    &connection,
+                    PORTAL_DESTINATION,
+                    PORTAL_PATH,
+                    GLOBAL_SHORTCUTS_INTERFACE,
+                ) {
+                    Ok(proxy) => proxy,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not watch for shortcut activations");
+                        return;
+                    }
+                };
+
+                let activations = match proxy.receive_signal("Activated") {
+                    Ok(activations) => activations,
+                    Err(error) => {
+                        tracing::warn!(%error, "could not subscribe to Activated");
+                        return;
+                    }
+                };
+
+                for message in activations {
+                    let body: (OwnedObjectPath, String, u64, HashMap<String, OwnedValue>) =
+                        match message.body().deserialize() {
+                            Ok(body) => body,
+                            Err(error) => {
+                                tracing::debug!(%error, "ignoring an unparseable Activated signal");
+                                continue;
+                            }
+                        };
+
+                    // The bus delivers signals for every session on this
+                    // connection, so ours has to be picked out.
+                    if body.0 != session {
+                        continue;
+                    }
+
+                    match Action::from_id(&body.1) {
+                        Some(action) => {
+                            if sender.send(action).is_err() {
+                                // Nobody is polling any more.
+                                return;
+                            }
+                        }
+                        None => {
+                            tracing::debug!(shortcut_id = body.1, "ignoring an unknown shortcut")
+                        }
+                    }
+                }
+
+                tracing::warn!("the portal stopped delivering shortcut activations");
+            })
+            .map_err(|source| Error::Backend(format!("could not start the listener: {source}")))?;
+
+        self.activations = Some(receiver);
+        Ok(())
     }
 }
 

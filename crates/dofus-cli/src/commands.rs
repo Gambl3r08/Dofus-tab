@@ -173,6 +173,13 @@ pub fn daemon() -> Result<()> {
     }
     println!("Your desktop may ask you to confirm them the first time.");
 
+    if hotkeys.requires_main_thread() {
+        bail!(
+            "on this platform hotkeys are only delivered to a thread running the \
+             application event loop, which the daemon does not have; use the overlay bar instead"
+        );
+    }
+
     hotkeys
         .bind(&bindings)
         .context("could not register the global shortcuts")?;
@@ -184,15 +191,20 @@ pub fn daemon() -> Result<()> {
     // Rescan on every activation rather than caching: a scan costs a few
     // milliseconds and it is always right, even if a client was just launched
     // or closed.
-    hotkeys
-        .listen(&mut |action| {
-            let hotkey::Action::FocusSlot(slot) = action;
+    loop {
+        for hotkey::Action::FocusSlot(slot) in hotkeys.poll() {
             if let Err(error) = focus_slot(slot) {
                 eprintln!("Could not focus slot {slot}: {error:#}");
             }
-        })
-        .context("the hotkey listener stopped")
+        }
+        std::thread::sleep(POLL_INTERVAL);
+    }
 }
+
+/// How often the daemon checks for hotkey activations.
+///
+/// Short enough to feel instant, long enough to stay invisible in `top`.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(30);
 
 /// Warns about shortcuts the desktop accepted but left without a key.
 ///

@@ -123,10 +123,12 @@ Settings opens a second window with three sections:
 Edits reach the background worker immediately, so a rename or a reorder shows up
 in the bar without a restart.
 
-Linux uses the StatusNotifierItem D-Bus specification directly rather than
-`libappindicator`, which is not installed everywhere and would pull in GTK and a
-second main loop. The tray is optional — if the desktop offers none, the bar and
-the hotkeys carry on working.
+Windows and macOS use `tray-icon`, which wraps the native APIs. Linux does not:
+`tray-icon`'s Linux path needs `libayatana-appindicator`, which is not installed
+everywhere and pulls in GTK plus a second main loop, so the StatusNotifierItem
+D-Bus specification is spoken directly instead. Both funnel into the same
+channel, so the bar sees one interface. The tray is optional — if the desktop
+offers none, the bar and the hotkeys carry on working.
 
 ### Layout
 
@@ -200,6 +202,19 @@ Triggers use the freedesktop shortcuts syntax (`ALT`, `CTRL`, `SHIFT`, `LOGO`,
 joined with `+`). They are *preferred* triggers: the desktop may reassign one
 that clashes with an existing shortcut, and the user can always change it
 afterwards from their system settings.
+
+### Why polling rather than a callback
+
+The obvious shape is a blocking `listen(callback)` on a worker thread, and that
+is what X11 and Win32 want. macOS cannot do it, for the reason above. The trait
+therefore exposes a non-blocking `poll`, and each backend hides its own
+machinery behind it: the portal and Win32 run an internal thread and feed a
+channel, macOS registers on the caller's thread. The bar polls once per frame,
+the daemon in a small loop.
+
+Win32 has the same constraint in miniature — `RegisterHotKey` and the message
+pump must share a thread — so `bind` starts that thread and waits for it to
+report what it managed to register.
 
 ### Why the portal, and not `XGrabKey`
 
@@ -370,19 +385,14 @@ tab. Dofus shows one main window per client, so this holds in practice.
 `make_overlay` is a no-op on macOS: unlike X11, winit's always-on-top window
 level does reach AppKit, so there is nothing to patch up.
 
-**Why there are no hotkeys yet.** Carbon's `RegisterEventHotKey` needs no
-permission, but it delivers through the application's Carbon event target, which
-is only pumped by a `CFRunLoop` on the **main thread**. The `HotkeyManager`
-contract is a blocking `listen` called from a worker thread — what the X11 and
-Win32 backends do and what both front ends are built around. On macOS that
-thread would never receive anything, and the failure mode is silence, which is
-exactly the bug class that already cost this project an afternoon on KDE.
+**Hotkeys work in the bar, not in the daemon.** Carbon's `RegisterEventHotKey`
+needs no permission, but it delivers through the application's event target,
+which only a `CFRunLoop` on the **main thread** pumps. The overlay bar has one —
+winit runs it — so it registers and polls from there. `dofus-tab daemon` has no
+such loop, so on macOS it refuses up front and points at the bar rather than
+waiting for keypresses that can never arrive.
 
-Fixing it means restructuring the front ends so the listener owns the main
-thread, or handing registration to whatever already owns it: winit's event loop
-in the bar, a `CFRunLoop` in the CLI daemon. That is a design change rather than
-a missing function, and not something to guess at without a Mac. The backend
-therefore returns a clear `Unsupported` error rather than failing quietly.
+This is why [`HotkeyManager`] polls rather than blocking; see below.
 
 The account identification chain is expected to carry over unchanged, because
 the launcher is the same Electron application on all three platforms and stores
@@ -438,11 +448,11 @@ All code, comments, documentation and tests are written in English.
 - [ ] Run and fix the Windows backend on real hardware
 - [x] macOS window backend (AppKit) — written and cross-compiling, not yet run
 - [ ] Run and fix the macOS backend on real hardware
-- [ ] macOS global hotkeys (needs a main-thread run loop)
+- [x] macOS global hotkeys (bar only; the daemon has no run loop)
 - [x] CI building and testing natively on all three platforms
 - [x] Rename and reorder tabs from the settings window
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
-- [ ] Tray icon on Windows and macOS
+- [x] Tray icon on Windows and macOS
 - [ ] Embed the `.ico` in the Windows executable
 - [x] Autostart entry (Linux; Windows and macOS still to do)
 - [x] Refuse to register hotkeys twice at once

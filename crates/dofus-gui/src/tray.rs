@@ -12,20 +12,26 @@
 //! An overlay with no title bar and no taskbar entry needs somewhere to live
 //! when the user wants to close it or change a setting. The tray is that place.
 //!
-//! Linux goes through the StatusNotifierItem D-Bus specification rather than
-//! `libappindicator`, which is not installed everywhere and would drag in GTK
-//! and a second main loop. KDE, GNOME (with an extension) and most panels
-//! implement the specification natively.
+//! # Two backends
+//!
+//! Windows and macOS use `tray-icon`, which wraps the native APIs. Linux does
+//! not: `tray-icon`'s Linux path needs `libayatana-appindicator`, which is not
+//! installed everywhere, and pulls in GTK plus a second main loop. The
+//! StatusNotifierItem D-Bus specification is spoken directly instead, which KDE
+//! and most panels implement natively and which costs no extra dependency
+//! beyond the D-Bus client already used for the hotkey portal.
+//!
+//! Both backends funnel into the same channel, so the bar sees one interface.
+//!
+//! # Threading
+//!
+//! [`spawn`] must be called from the main thread. macOS requires it for any
+//! status item, and Windows needs the tray's window to belong to the thread
+//! that pumps messages — which is the one running the event loop.
 
 use std::sync::mpsc::Receiver;
-#[cfg(target_os = "linux")]
-use std::sync::mpsc::{self, Sender};
 
 /// What the user picked from the tray menu.
-///
-/// Only constructed on platforms that have a tray backend, so the variants read
-/// as dead code on the others even though the bar still matches on them.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TrayCommand {
     /// Open the settings window.
@@ -36,11 +42,23 @@ pub enum TrayCommand {
     Quit,
 }
 
+/// Labels, kept in one place so both backends agree.
+const SETTINGS_LABEL: &str = "Settings...";
+const TOGGLE_LABEL: &str = "Show/hide bar";
+const QUIT_LABEL: &str = "Quit";
+const TOOLTIP: &str = "Dofus-tab - switch between Dofus clients";
+
+/// Whatever went wrong while installing the tray.
+///
+/// Each backend has its own error type and none of them is interesting beyond
+/// its message, so they are boxed rather than unified into an enum.
+type BuildError = Box<dyn std::error::Error>;
+
 /// Keeps the tray alive; dropping this removes the icon.
 pub struct TrayHandle {
     commands: Receiver<TrayCommand>,
-    #[cfg(target_os = "linux")]
-    _service: ksni::blocking::Handle<linux::DofusTray>,
+    /// The platform object whose lifetime the icon depends on.
+    _backend: imp::Backend,
 }
 
 impl TrayHandle {
@@ -54,20 +72,15 @@ impl TrayHandle {
 ///
 /// Returns `None` when no tray is available, which is not fatal: the bar and
 /// the hotkeys keep working, the user just loses the menu.
-#[cfg(target_os = "linux")]
+///
+/// `repaint` wakes the UI thread, which is otherwise idle waiting for events.
 pub fn spawn(repaint: impl Fn() + Send + Sync + 'static) -> Option<TrayHandle> {
-    use ksni::blocking::TrayMethods;
+    let (sender, commands) = std::sync::mpsc::channel();
 
-    let (sender, commands) = mpsc::channel();
-    let tray = linux::DofusTray {
-        sender,
-        repaint: Box::new(repaint),
-    };
-
-    match tray.spawn() {
-        Ok(service) => Some(TrayHandle {
+    match imp::build(sender, Box::new(repaint)) {
+        Ok(backend) => Some(TrayHandle {
             commands,
-            _service: service,
+            _backend: backend,
         }),
         Err(error) => {
             tracing::warn!(%error, "no system tray available");
@@ -76,22 +89,38 @@ pub fn spawn(repaint: impl Fn() + Send + Sync + 'static) -> Option<TrayHandle> {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn spawn(_repaint: impl Fn() + Send + Sync + 'static) -> Option<TrayHandle> {
-    tracing::debug!("the tray is not implemented on this platform yet");
-    None
+/// Decodes the embedded window icon into raw RGBA.
+fn icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
+    let icon = eframe::icon_data::from_png_bytes(crate::ICON_PNG)
+        .inspect_err(|error| tracing::warn!(%error, "could not decode the tray icon"))
+        .ok()?;
+
+    Some((icon.rgba, icon.width, icon.height))
 }
 
 #[cfg(target_os = "linux")]
-mod linux {
-    use super::{Sender, TrayCommand};
+mod imp {
+    use std::sync::mpsc::Sender;
+
     use dofus_core::registry::OWN_APP_ID;
+    use ksni::blocking::TrayMethods;
     use ksni::menu::{MenuItem, StandardItem};
 
+    use super::{QUIT_LABEL, SETTINGS_LABEL, TOGGLE_LABEL, TOOLTIP, TrayCommand};
+
+    /// Handle to the running StatusNotifierItem service.
+    pub type Backend = ksni::blocking::Handle<DofusTray>;
+
+    pub fn build(
+        sender: Sender<TrayCommand>,
+        repaint: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Backend, super::BuildError> {
+        Ok(DofusTray { sender, repaint }.spawn()?)
+    }
+
     pub struct DofusTray {
-        pub sender: Sender<TrayCommand>,
-        /// Wakes the UI thread, which is otherwise idle waiting for events.
-        pub repaint: Box<dyn Fn() + Send + Sync>,
+        sender: Sender<TrayCommand>,
+        repaint: Box<dyn Fn() + Send + Sync>,
     }
 
     impl DofusTray {
@@ -130,48 +159,117 @@ mod linux {
         }
 
         /// Embedded fallback, so the icon still shows before installation.
+        ///
+        /// StatusNotifierItem wants ARGB32 in network byte order, while the
+        /// decoder hands back RGBA, so the channels are reordered here.
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-            super::embedded_icon().into_iter().collect()
+            let Some((rgba, width, height)) = super::icon_rgba() else {
+                return Vec::new();
+            };
+
+            let data = rgba
+                .chunks_exact(4)
+                .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
+                .collect();
+
+            vec![ksni::Icon {
+                width: width as i32,
+                height: height as i32,
+                data,
+            }]
         }
 
         fn tool_tip(&self) -> ksni::ToolTip {
             ksni::ToolTip {
                 title: "Dofus-tab".to_owned(),
-                description: "Switch between Dofus clients".to_owned(),
+                description: TOOLTIP.to_owned(),
                 ..Default::default()
             }
         }
 
         fn menu(&self) -> Vec<MenuItem<Self>> {
             vec![
-                Self::item("Settings...", TrayCommand::ShowSettings),
-                Self::item("Show/hide bar", TrayCommand::ToggleBar),
+                Self::item(SETTINGS_LABEL, TrayCommand::ShowSettings),
+                Self::item(TOGGLE_LABEL, TrayCommand::ToggleBar),
                 MenuItem::Separator,
-                Self::item("Quit", TrayCommand::Quit),
+                Self::item(QUIT_LABEL, TrayCommand::Quit),
             ]
         }
     }
 }
 
-/// Decodes the embedded window icon into the tray's pixel format.
-///
-/// StatusNotifierItem wants ARGB32 in network byte order, while the decoder
-/// hands back RGBA, so the channels are reordered here.
-#[cfg(target_os = "linux")]
-fn embedded_icon() -> Option<ksni::Icon> {
-    let icon = eframe::icon_data::from_png_bytes(crate::ICON_PNG)
-        .inspect_err(|error| tracing::warn!(%error, "could not decode the tray icon"))
-        .ok()?;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+mod imp {
+    use std::sync::mpsc::Sender;
 
-    let data = icon
-        .rgba
-        .chunks_exact(4)
-        .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
-        .collect();
+    use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+    use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
-    Some(ksni::Icon {
-        width: icon.width as i32,
-        height: icon.height as i32,
-        data,
-    })
+    use super::{QUIT_LABEL, SETTINGS_LABEL, TOGGLE_LABEL, TOOLTIP, TrayCommand};
+
+    /// The icon itself; dropping it removes the tray entry.
+    pub type Backend = TrayIcon;
+
+    pub fn build(
+        sender: Sender<TrayCommand>,
+        repaint: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Backend, super::BuildError> {
+        let settings = MenuItem::new(SETTINGS_LABEL, true, None);
+        let toggle = MenuItem::new(TOGGLE_LABEL, true, None);
+        let quit = MenuItem::new(QUIT_LABEL, true, None);
+
+        let menu = Menu::new();
+        menu.append_items(&[&settings, &toggle, &PredefinedMenuItem::separator(), &quit])?;
+
+        // Menu events arrive on a global channel with no wake-up of their own,
+        // so they are translated here and the UI thread is nudged.
+        let (settings_id, toggle_id, quit_id) = (
+            settings.id().clone(),
+            toggle.id().clone(),
+            quit.id().clone(),
+        );
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let command = if event.id == settings_id {
+                TrayCommand::ShowSettings
+            } else if event.id == toggle_id {
+                TrayCommand::ToggleBar
+            } else if event.id == quit_id {
+                TrayCommand::Quit
+            } else {
+                return;
+            };
+
+            let _ = sender.send(command);
+            repaint();
+        }));
+
+        let mut builder = TrayIconBuilder::new()
+            .with_menu(Box::new(menu))
+            .with_tooltip(TOOLTIP);
+
+        if let Some((rgba, width, height)) = super::icon_rgba() {
+            match Icon::from_rgba(rgba, width, height) {
+                Ok(icon) => builder = builder.with_icon(icon),
+                Err(error) => tracing::warn!(%error, "could not build the tray icon"),
+            }
+        }
+
+        Ok(builder.build()?)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
+mod imp {
+    use std::sync::mpsc::Sender;
+
+    use super::TrayCommand;
+
+    pub type Backend = ();
+
+    pub fn build(
+        _sender: Sender<TrayCommand>,
+        _repaint: Box<dyn Fn() + Send + Sync>,
+    ) -> Result<Backend, super::BuildError> {
+        Err("the tray is not implemented on this platform".into())
+    }
 }

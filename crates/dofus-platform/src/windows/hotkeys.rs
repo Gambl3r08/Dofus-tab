@@ -12,14 +12,17 @@
 //! Win32 needs no permission dance: a hotkey is registered against the calling
 //! thread and delivered as `WM_HOTKEY` to that thread's message queue. The
 //! catch is that registration and the message loop must happen on the *same*
-//! thread, so [`bind`](HotkeyManager::bind) only records what to register and
-//! the work happens inside [`listen`](HotkeyManager::listen).
+//! thread, so [`bind`](HotkeyManager::bind) starts a thread that does both and
+//! reports back through channels.
 //!
-//! Registration can also fail outright when another application already owns
-//! the combination, which is reported through
+//! Registration can fail outright when another application already owns a
+//! combination, which is reported through
 //! [`registered`](HotkeyManager::registered) as a shortcut with no trigger.
 
 use std::collections::BTreeMap;
+use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use dofus_core::hotkey::{
     Action, HotkeyBinding, HotkeyManager, RegisteredShortcut, Trigger, parse_trigger,
@@ -31,118 +34,128 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, MSG, WM_HOTKEY};
 
+/// How long `bind` waits for the worker to report what it managed to register.
+const REGISTRATION_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// Global hotkeys backed by the Win32 hotkey API.
 #[derive(Default)]
 pub struct WindowsHotkeys {
-    /// Slot-derived hotkey id mapped to the action it triggers.
-    wanted: BTreeMap<i32, (Action, Trigger)>,
-    /// Filled in by `listen`, once registration has actually been attempted.
-    outcome: BTreeMap<i32, Option<String>>,
+    /// Fed by the worker thread once `bind` has run.
+    activations: Option<Receiver<Action>>,
+    /// Filled in by the worker as it registers each shortcut.
+    registered: Arc<Mutex<Vec<RegisteredShortcut>>>,
 }
 
 impl WindowsHotkeys {
     pub fn connect() -> Result<Self> {
         Ok(Self::default())
     }
-
-    /// Registers every wanted hotkey, recording which ones were accepted.
-    ///
-    /// Must run on the thread that will pump the messages.
-    fn register_all(&mut self) {
-        for (id, (_, trigger)) in &self.wanted {
-            let modifiers = to_modifiers(trigger);
-            let Some(key) = to_virtual_key(&trigger.key) else {
-                tracing::warn!(key = %trigger.key, "unknown key name, skipping");
-                self.outcome.insert(*id, None);
-                continue;
-            };
-
-            // A null window handle posts WM_HOTKEY to this thread's queue.
-            let result = unsafe { RegisterHotKey(None, *id, modifiers | MOD_NOREPEAT, key) };
-            match result {
-                Ok(()) => {
-                    self.outcome.insert(*id, Some(describe(trigger)));
-                }
-                Err(error) => {
-                    tracing::warn!(%error, trigger = %describe(trigger), "hotkey already taken");
-                    self.outcome.insert(*id, None);
-                }
-            }
-        }
-    }
-
-    fn unregister_all(&self) {
-        for id in self.wanted.keys() {
-            let _ = unsafe { UnregisterHotKey(None, *id) };
-        }
-    }
 }
 
 impl HotkeyManager for WindowsHotkeys {
     fn bind(&mut self, bindings: &[HotkeyBinding]) -> Result<()> {
-        self.wanted.clear();
-        self.outcome.clear();
-
+        let mut wanted: BTreeMap<i32, (Action, Trigger)> = BTreeMap::new();
         for binding in bindings {
             let Action::FocusSlot(slot) = binding.action;
             let Some(trigger) = parse_trigger(&binding.trigger) else {
                 tracing::warn!(trigger = %binding.trigger, "could not parse the trigger");
                 continue;
             };
-            self.wanted.insert(slot as i32, (binding.action, trigger));
+            wanted.insert(slot as i32, (binding.action, trigger));
         }
 
+        let (activations, activation_rx) = mpsc::channel();
+        let (ready, ready_rx) = mpsc::channel();
+        let registered = Arc::clone(&self.registered);
+
+        std::thread::Builder::new()
+            .name("dofus-tab-hotkeys".to_string())
+            .spawn(move || run(wanted, registered, activations, ready))
+            .map_err(|source| Error::Backend(format!("could not start the listener: {source}")))?;
+
+        // Wait for the worker to finish registering so `registered` reports the
+        // truth rather than an empty list on the first call.
+        ready_rx
+            .recv_timeout(REGISTRATION_TIMEOUT)
+            .map_err(|_| Error::Backend("the hotkey thread did not report back".to_string()))?;
+
+        self.activations = Some(activation_rx);
         Ok(())
     }
 
     fn registered(&mut self) -> Result<Vec<RegisteredShortcut>> {
         Ok(self
-            .wanted
-            .iter()
-            .map(|(id, (action, trigger))| RegisteredShortcut {
-                action: *action,
-                // Before `listen` runs nothing is registered yet, so report the
-                // intended trigger rather than claiming it is inert.
-                trigger: match self.outcome.get(id) {
-                    Some(outcome) => outcome.clone(),
-                    None => Some(describe(trigger)),
-                },
-            })
-            .collect())
+            .registered
+            .lock()
+            .expect("the registration mutex was poisoned")
+            .clone())
     }
 
-    fn listen(&mut self, on_activated: &mut dyn FnMut(Action)) -> Result<()> {
-        self.register_all();
-
-        if self.outcome.values().all(Option::is_none) {
-            self.unregister_all();
-            return Err(Error::Backend(
-                "no hotkey could be registered; another application already owns them".to_string(),
-            ));
+    fn poll(&mut self) -> Vec<Action> {
+        match &self.activations {
+            Some(activations) => activations.try_iter().collect(),
+            None => Vec::new(),
         }
-
-        let mut message = MSG::default();
-        // A null window handle pumps thread messages, which is where WM_HOTKEY
-        // lands. GetMessageW returns 0 on WM_QUIT and -1 on error.
-        while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
-            if message.message != WM_HOTKEY {
-                continue;
-            }
-            let id = message.wParam.0 as i32;
-            match self.wanted.get(&id) {
-                Some((action, _)) => on_activated(*action),
-                None => tracing::debug!(id, "ignoring an unknown hotkey"),
-            }
-        }
-
-        self.unregister_all();
-        Ok(())
     }
 }
 
-impl Drop for WindowsHotkeys {
-    fn drop(&mut self) {
-        self.unregister_all();
+/// Registers the hotkeys and pumps messages until the receiver goes away.
+fn run(
+    wanted: BTreeMap<i32, (Action, Trigger)>,
+    registered: Arc<Mutex<Vec<RegisteredShortcut>>>,
+    activations: mpsc::Sender<Action>,
+    ready: mpsc::Sender<()>,
+) {
+    let mut outcome = Vec::new();
+
+    for (id, (action, trigger)) in &wanted {
+        let modifiers = to_modifiers(trigger);
+        let Some(key) = to_virtual_key(&trigger.key) else {
+            tracing::warn!(key = %trigger.key, "unknown key name, skipping");
+            outcome.push(RegisteredShortcut {
+                action: *action,
+                trigger: None,
+            });
+            continue;
+        };
+
+        // A null window handle posts WM_HOTKEY to this thread's queue.
+        let trigger = match unsafe { RegisterHotKey(None, *id, modifiers | MOD_NOREPEAT, key) } {
+            Ok(()) => Some(describe(trigger)),
+            Err(error) => {
+                tracing::warn!(%error, trigger = %describe(trigger), "hotkey already taken");
+                None
+            }
+        };
+        outcome.push(RegisteredShortcut {
+            action: *action,
+            trigger,
+        });
+    }
+
+    *registered
+        .lock()
+        .expect("the registration mutex was poisoned") = outcome;
+    let _ = ready.send(());
+
+    let mut message = MSG::default();
+    // A null window handle pumps thread messages, which is where WM_HOTKEY
+    // lands. GetMessageW returns 0 on WM_QUIT and -1 on error.
+    while unsafe { GetMessageW(&mut message, None, 0, 0) }.0 > 0 {
+        if message.message != WM_HOTKEY {
+            continue;
+        }
+        let id = message.wParam.0 as i32;
+        match wanted.get(&id) {
+            // A send failure means nobody is polling any more.
+            Some((action, _)) if activations.send(*action).is_err() => break,
+            Some(_) => {}
+            None => tracing::debug!(id, "ignoring an unknown hotkey"),
+        }
+    }
+
+    for id in wanted.keys() {
+        let _ = unsafe { UnregisterHotKey(None, *id) };
     }
 }
 

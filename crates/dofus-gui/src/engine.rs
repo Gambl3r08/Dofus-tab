@@ -53,8 +53,6 @@ pub struct EngineState {
     pub active: Option<WindowId>,
     /// Last error, shown in the bar instead of silently rendering nothing.
     pub error: Option<String>,
-    /// What the desktop assigned to each hotkey, shown in the settings window.
-    pub shortcuts: Vec<hotkey::RegisteredShortcut>,
 }
 
 /// Handle the UI keeps to talk to the worker.
@@ -97,73 +95,74 @@ pub fn spawn(on_change: impl Fn() + Send + 'static) -> EngineHandle {
     handle
 }
 
-/// Starts a thread that turns global hotkeys into [`Command::Focus`].
+/// Registers the global hotkeys, to be polled from the UI thread.
 ///
-/// Failing to reach the hotkey provider is not fatal: the bar stays usable with
-/// the mouse, so the error is logged and the thread exits.
-pub fn spawn_hotkeys(handle: EngineHandle) {
-    thread::Builder::new()
-        .name("dofus-tab-hotkeys".to_string())
-        .spawn(move || {
-            // Held for the lifetime of the thread; see `dofus_core::instance`.
-            let _lock = match instance::acquire(instance::HOTKEY_LOCK) {
-                Ok(lock) => lock,
-                Err(error) => {
-                    tracing::warn!(%error, "not registering hotkeys");
-                    return;
-                }
-            };
-
-            let config = Config::load().unwrap_or_default();
-            let bindings = config.hotkey_bindings();
-
-            let mut hotkeys = match dofus_platform::detect_hotkey_manager() {
-                Ok(hotkeys) => hotkeys,
-                Err(error) => {
-                    tracing::warn!(%error, "global hotkeys are unavailable");
-                    return;
-                }
-            };
-
-            if let Err(error) = hotkeys.bind(&bindings) {
-                tracing::warn!(%error, "could not register the global shortcuts");
-                return;
-            }
-
-            publish_shortcuts(hotkeys.as_mut(), &handle);
-
-            let result = hotkeys.listen(&mut |action| {
-                let hotkey::Action::FocusSlot(slot) = action;
-                handle.send(Command::Focus(slot));
-            });
-
-            if let Err(error) = result {
-                tracing::warn!(%error, "the hotkey listener stopped");
-            }
-        })
-        .expect("the hotkey thread should start");
-}
-
-/// Records what the desktop assigned, and warns about anything left inert.
-fn publish_shortcuts(hotkeys: &mut dyn hotkey::HotkeyManager, handle: &EngineHandle) {
-    let Ok(registered) = hotkeys.registered() else {
-        return;
+/// Deliberately *not* on a worker thread: macOS only delivers hotkeys to the
+/// thread running the application event loop, which is the one drawing the bar.
+/// Returning `None` is not fatal — the bar stays usable with the mouse.
+pub fn bind_hotkeys() -> Option<HotkeySession> {
+    // Held for as long as the session lives; see `dofus_core::instance`.
+    let lock = match instance::acquire(instance::HOTKEY_LOCK) {
+        Ok(lock) => lock,
+        Err(error) => {
+            tracing::warn!(%error, "not registering hotkeys");
+            return None;
+        }
     };
 
-    let inert = registered.iter().filter(|s| !s.is_active()).count();
-    if inert > 0 {
-        tracing::warn!(
-            inert,
-            total = registered.len(),
-            "some shortcuts have no key assigned and will never fire"
-        );
+    let config = Config::load().unwrap_or_default();
+    let mut hotkeys = match dofus_platform::detect_hotkey_manager() {
+        Ok(hotkeys) => hotkeys,
+        Err(error) => {
+            tracing::warn!(%error, "global hotkeys are unavailable");
+            return None;
+        }
+    };
+
+    if let Err(error) = hotkeys.bind(&config.hotkey_bindings()) {
+        tracing::warn!(%error, "could not register the global shortcuts");
+        return None;
     }
 
-    handle
-        .state
-        .lock()
-        .expect("engine state mutex was poisoned")
-        .shortcuts = registered;
+    Some(HotkeySession {
+        hotkeys,
+        _lock: lock,
+    })
+}
+
+/// Live hotkey registration, polled once per frame.
+pub struct HotkeySession {
+    hotkeys: Box<dyn hotkey::HotkeyManager>,
+    _lock: instance::InstanceLock,
+}
+
+impl HotkeySession {
+    /// Returns the slots activated since the last call.
+    pub fn poll(&mut self) -> Vec<u32> {
+        self.hotkeys
+            .poll()
+            .into_iter()
+            .map(|hotkey::Action::FocusSlot(slot)| slot)
+            .collect()
+    }
+
+    /// What the desktop assigned, and a warning for anything left inert.
+    pub fn registered(&mut self) -> Vec<hotkey::RegisteredShortcut> {
+        let Ok(registered) = self.hotkeys.registered() else {
+            return Vec::new();
+        };
+
+        let inert = registered.iter().filter(|s| !s.is_active()).count();
+        if inert > 0 {
+            tracing::warn!(
+                inert,
+                total = registered.len(),
+                "some shortcuts have no key assigned and will never fire"
+            );
+        }
+
+        registered
+    }
 }
 
 /// Worker loop: serve commands, and re-scan whenever the queue goes quiet.

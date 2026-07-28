@@ -72,7 +72,6 @@ fn main() -> Result<()> {
                 let ctx = ctx.clone();
                 move || ctx.request_repaint()
             });
-            engine::spawn_hotkeys(engine.clone());
 
             let tray = tray::spawn({
                 let ctx = ctx.clone();
@@ -87,7 +86,9 @@ fn main() -> Result<()> {
                 None => tracing::warn!("could not read our own window handle"),
             }
 
-            Ok(Box::new(app::BarApp::new(engine, config, tray)))
+            let hotkeys = engine::bind_hotkeys();
+
+            Ok(Box::new(app::BarApp::new(engine, config, tray, hotkeys)))
         }),
     )
     .map_err(|error| anyhow::anyhow!("could not start the overlay: {error}"))

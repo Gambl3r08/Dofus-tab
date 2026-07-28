@@ -183,6 +183,19 @@ impl RegisteredShortcut {
 }
 
 /// Registers global hotkeys and delivers their activations.
+///
+/// # Why polling
+///
+/// The obvious shape is a blocking `listen(callback)` on a worker thread, and
+/// that is what X11 and Win32 want. macOS cannot do it: Carbon delivers hotkeys
+/// through the application's event target, which only a `CFRunLoop` on the
+/// **main thread** pumps, so a worker thread would wait forever and report
+/// nothing.
+///
+/// Polling is therefore the contract, and each backend hides its own machinery
+/// behind it — an internal thread where one is needed, the caller's thread
+/// where the platform insists on it. The caller polls from wherever it already
+/// has a loop.
 pub trait HotkeyManager {
     /// Registers `bindings` with the desktop.
     ///
@@ -192,8 +205,16 @@ pub trait HotkeyManager {
     /// Asks the desktop what it actually assigned to our shortcuts.
     fn registered(&mut self) -> crate::Result<Vec<RegisteredShortcut>>;
 
-    /// Blocks forever, invoking `on_activated` every time a hotkey fires.
-    fn listen(&mut self, on_activated: &mut dyn FnMut(Action)) -> crate::Result<()>;
+    /// Returns every activation since the last call. Never blocks.
+    fn poll(&mut self) -> Vec<Action>;
+
+    /// Whether this backend only works when driven from the main thread.
+    ///
+    /// True on macOS. Callers with no main-thread loop — the CLI daemon — use
+    /// it to explain why nothing will fire instead of hanging silently.
+    fn requires_main_thread(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
