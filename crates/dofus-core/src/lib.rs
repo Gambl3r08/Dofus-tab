@@ -14,6 +14,7 @@ pub mod error;
 pub mod hotkey;
 pub mod identity;
 pub mod launcher;
+pub mod layout;
 pub mod registry;
 pub mod window;
 
@@ -37,6 +38,19 @@ pub trait WindowManager {
 
     /// Gives focus to `id` and raises it above other windows.
     fn focus(&mut self, id: WindowId) -> Result<()>;
+
+    /// The window that currently holds focus, when the backend can tell.
+    ///
+    /// Used to highlight the active tab; a backend that cannot answer returns
+    /// `Ok(None)` rather than failing, since this is cosmetic.
+    fn active_window(&mut self) -> Result<Option<WindowId>>;
+
+    /// Turns `id` into an overlay: kept above other windows and hidden from the
+    /// task switcher.
+    ///
+    /// Called by the bar on its own window, because GUI toolkits do not
+    /// reliably apply these hints on every window manager.
+    fn make_overlay(&mut self, id: WindowId) -> Result<()>;
 }
 
 /// Reads process metadata, used to map a window back to an Ankama account.

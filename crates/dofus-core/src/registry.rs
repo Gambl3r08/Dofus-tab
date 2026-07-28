@@ -26,13 +26,23 @@ pub struct Tab {
     pub title: String,
 }
 
+/// Application class of our own overlay window.
+///
+/// It contains "dofus", so it has to be excluded explicitly or the bar lists
+/// itself as a tab.
+pub const OWN_APP_CLASS: &str = "dofus-tab";
+
 /// Whether a window belongs to a Dofus game client.
 ///
 /// Matches on the application class rather than the title, which is a constant
-/// `"Dofus"`. The launcher itself (`Ankama Launcher`) must never match.
+/// `"Dofus"`. Neither the launcher (`Ankama Launcher`) nor our own overlay may
+/// match.
 pub fn looks_like_dofus(window: &GameWindow) -> bool {
     let class = window.app_class.to_ascii_lowercase();
-    class.contains("dofus") && !class.contains("ankama") && !class.contains("zaap")
+    class.contains("dofus")
+        && !class.contains("ankama")
+        && !class.contains("zaap")
+        && !class.contains(OWN_APP_CLASS)
 }
 
 /// Builds the ordered tab list from a window scan.
@@ -178,6 +188,12 @@ mod tests {
         assert!(looks_like_dofus(&window(1, 1, "dofus.exe")));
         assert!(!looks_like_dofus(&window(1, 1, "Ankama Launcher")));
         assert!(!looks_like_dofus(&window(1, 1, "firefox")));
+    }
+
+    #[test]
+    fn our_own_overlay_is_never_listed_as_a_tab() {
+        assert!(!looks_like_dofus(&window(1, 1, OWN_APP_CLASS)));
+        assert!(!looks_like_dofus(&window(1, 1, "Dofus-tab")));
     }
 
     #[test]

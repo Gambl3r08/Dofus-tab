@@ -6,9 +6,9 @@ It maps every running Dofus client to a numbered tab and lets you jump between
 them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
-> **Status:** v0. The command line interface, the Linux/X11 backend and global
-> hotkeys work end to end. The overlay GUI and the Windows and macOS backends
-> are not implemented yet — see [Roadmap](#roadmap).
+> **Status:** v0. The overlay bar, the command line interface, the Linux/X11
+> backend and global hotkeys work end to end. The Windows and macOS backends are
+> not implemented yet — see [Roadmap](#roadmap).
 
 ## Scope
 
@@ -23,7 +23,8 @@ Requires Rust 1.85 or newer.
 
 ```sh
 cargo build --release
-./target/release/dofus-tab list
+./target/release/dofus-tab list        # command line
+./target/release/dofus-tab-bar         # overlay bar + hotkeys
 ```
 
 ## Usage
@@ -45,6 +46,66 @@ $ dofus-tab list
   1  someone#1546                  account=62833850     pid=11825    window=0x220000a
   2  Iop                           account=62845763     pid=12904    window=0x2400012
 ```
+
+## The overlay bar
+
+```sh
+cargo run --release --bin dofus-tab-bar
+```
+
+`dofus-tab-bar` is a thin always-on-top strip with one button per detected
+client. The tab of the focused client is highlighted, clicking a tab focuses it,
+and the dotted grip on the left drags the bar around — its position is
+remembered in the config. The same process also registers the global hotkeys, so
+one binary covers both ways of switching.
+
+The bar re-scans every 750 ms on a worker thread, so the UI never blocks on an
+X11 round trip, and clients launched or closed behind its back appear and
+disappear on their own.
+
+### Layout
+
+Tabs are laid out in a grid that wraps, so eight accounts do not become a
+thousand-pixel-wide strip. By default the bar fills **downwards and wraps after
+four**, which keeps it narrow:
+
+| Accounts | Default grid        |
+|----------|---------------------|
+| 2        | 1 column x 2 rows   |
+| 4        | 1 column x 4 rows   |
+| 5        | 2 columns x 4 rows  |
+| 8        | 2 columns x 4 rows  |
+
+Both the direction and the wrap point are configurable:
+
+```json
+{
+  "overlay_orientation": "horizontal",
+  "overlay_wrap_at": 4
+}
+```
+
+`vertical` (the default) fills a column top to bottom before starting the next
+one. `horizontal` fills a row left to right before starting the next one, so
+eight accounts become 4 columns x 2 rows. Setting `overlay_wrap_at` above the
+account count gives the old single-line bar back.
+
+The window resizes itself to the grid, so it never reserves space it is not
+using.
+
+Two window-manager details worth knowing:
+
+- The bar **forces itself onto X11** even in a Wayland session. Wayland has no
+  standard way for an ordinary toplevel to stay above other windows, so a
+  native-Wayland bar would sink behind the game. Going through XWayland lets the
+  window manager honour `_NET_WM_STATE_ABOVE`, and costs nothing because the
+  Dofus client is an XWayland client too.
+- The always-on-top hints are applied by our own EWMH backend rather than by the
+  GUI toolkit. winit maps `WindowLevel::AlwaysOnTop` to something KWin does not
+  act on, so `make_overlay` sets `_NET_WM_STATE_ABOVE`, `SKIP_TASKBAR` and
+  `SKIP_PAGER` directly. It both writes the property and sends the client
+  message, because EWMH requires the former before the window is mapped and the
+  latter after, and a caller cannot tell which side of the mapping it is on.
 
 ## Global hotkeys
 
@@ -159,7 +220,10 @@ crates/
     linux/x11.rs      EWMH backend (X11 sessions and XWayland clients)
     linux/portal.rs   global hotkeys via the XDG GlobalShortcuts portal
     process.rs        reading another process' command line
-  dofus-cli/        the v0 user interface
+  dofus-cli/        the command line interface
+  dofus-gui/        the always-on-top bar (egui), plus the hotkey listener
+    engine.rs         worker thread owning every platform handle
+    app.rs            the bar itself
 ```
 
 `dofus-core` defines two ports: `WindowManager` (enumerate and focus) and
@@ -211,7 +275,7 @@ All code, comments, documentation and tests are written in English.
 - [x] `dofus-tab` command line interface
 - [x] Global hotkeys via the XDG `GlobalShortcuts` portal
 - [ ] `.desktop` file and systemd user unit, so the portal sees our own app id
-- [ ] Always-on-top overlay bar
+- [x] Always-on-top overlay bar
 - [ ] Windows backend (Win32)
 - [ ] macOS backend (Accessibility API)
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)

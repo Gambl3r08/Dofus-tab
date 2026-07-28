@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use crate::account::AccountId;
 use crate::error::{Error, Result};
 use crate::hotkey;
+use crate::layout::{self, Orientation};
 
 /// User preferences, stored as JSON next to the platform config directory.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -27,6 +28,18 @@ pub struct Config {
     pub hotkeys: BTreeMap<u32, String>,
     /// How many slots get a hotkey. Defaults to [`hotkey::DEFAULT_MAX_SLOTS`].
     pub max_slots: Option<u32>,
+    /// Last position of the overlay bar, in logical screen coordinates.
+    ///
+    /// `None` lets the window manager place it on first launch.
+    pub overlay_position: Option<[f32; 2]>,
+    /// Direction the overlay fills before wrapping.
+    ///
+    /// Defaults to [`Orientation::Vertical`], which keeps the bar narrow.
+    pub overlay_orientation: Option<Orientation>,
+    /// Tabs shown before the overlay wraps to a new column or row.
+    ///
+    /// Defaults to [`layout::DEFAULT_WRAP_AT`].
+    pub overlay_wrap_at: Option<u32>,
 }
 
 impl Config {
@@ -84,6 +97,14 @@ impl Config {
     /// Replaces the saved order.
     pub fn set_order(&mut self, ids: impl IntoIterator<Item = AccountId>) {
         self.order = ids.into_iter().map(|id| id.0).collect();
+    }
+
+    /// Overlay grid settings, defaults merged with the user's overrides.
+    pub fn overlay_layout(&self) -> (Orientation, u32) {
+        (
+            self.overlay_orientation.unwrap_or_default(),
+            self.overlay_wrap_at.unwrap_or(layout::DEFAULT_WRAP_AT),
+        )
     }
 
     /// Hotkey bindings to register, defaults merged with the user's overrides.
@@ -148,6 +169,26 @@ mod tests {
         assert!(config.order.is_empty());
         assert!(config.hotkeys.is_empty());
         assert_eq!(config.max_slots, None);
+        assert_eq!(config.overlay_orientation, None);
+        assert_eq!(config.overlay_wrap_at, None);
+    }
+
+    #[test]
+    fn the_overlay_defaults_to_a_narrow_grid() {
+        assert_eq!(
+            Config::default().overlay_layout(),
+            (Orientation::Vertical, layout::DEFAULT_WRAP_AT)
+        );
+    }
+
+    #[test]
+    fn the_overlay_layout_can_be_overridden() {
+        let config = Config {
+            overlay_orientation: Some(Orientation::Horizontal),
+            overlay_wrap_at: Some(2),
+            ..Config::default()
+        };
+        assert_eq!(config.overlay_layout(), (Orientation::Horizontal, 2));
     }
 
     #[test]

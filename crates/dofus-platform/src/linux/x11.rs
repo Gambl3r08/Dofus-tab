@@ -11,10 +11,11 @@ use std::fmt::Display;
 use dofus_core::{Error, GameWindow, Result, WindowId, WindowManager};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt, EventMask, StackMode,
-    Window,
+    Atom, AtomEnum, ClientMessageEvent, ConfigureWindowAux, ConnectionExt, EventMask, PropMode,
+    StackMode, Window,
 };
 use x11rb::rust_connection::RustConnection;
+use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 /// `_NET_ACTIVE_WINDOW` source indication for a pager.
 ///
@@ -26,6 +27,9 @@ const SOURCE_INDICATION_PAGER: u32 = 2;
 /// Upper bound of property words to request; EWMH properties are far smaller.
 const MAX_PROPERTY_WORDS: u32 = 4096;
 
+/// `_NET_WM_STATE` action meaning "add this state".
+const NET_WM_STATE_ADD: u32 = 1;
+
 x11rb::atom_manager! {
     /// Atoms resolved once at connection time.
     pub Atoms: AtomsCookie {
@@ -33,6 +37,10 @@ x11rb::atom_manager! {
         _NET_ACTIVE_WINDOW,
         _NET_WM_PID,
         _NET_WM_NAME,
+        _NET_WM_STATE,
+        _NET_WM_STATE_ABOVE,
+        _NET_WM_STATE_SKIP_TASKBAR,
+        _NET_WM_STATE_SKIP_PAGER,
         UTF8_STRING,
     }
 }
@@ -117,6 +125,30 @@ impl X11Backend {
         fields.next().or(instance).unwrap_or_default()
     }
 
+    /// Asks the window manager to add up to two `_NET_WM_STATE` properties.
+    ///
+    /// The spec allows two atoms per message, so callers batch related states.
+    fn add_window_state(&self, window: Window, first: Atom, second: Atom) -> Result<()> {
+        let event = ClientMessageEvent::new(
+            32,
+            window,
+            self.atoms._NET_WM_STATE,
+            // [action, first property, second property, source indication, unused]
+            [NET_WM_STATE_ADD, first, second, SOURCE_INDICATION_PAGER, 0],
+        );
+
+        self.conn
+            .send_event(
+                false,
+                self.root,
+                EventMask::SUBSTRUCTURE_NOTIFY | EventMask::SUBSTRUCTURE_REDIRECT,
+                event,
+            )
+            .map_err(backend_error)?;
+
+        Ok(())
+    }
+
     /// Reads `_NET_WM_NAME`, falling back to the legacy `WM_NAME`.
     fn window_title(&self, window: Window) -> String {
         self.text(window, self.atoms._NET_WM_NAME, self.atoms.UTF8_STRING)
@@ -159,6 +191,52 @@ impl WindowManager for X11Backend {
                 app_class: self.window_class(handle),
             })
             .collect())
+    }
+
+    fn active_window(&mut self) -> Result<Option<WindowId>> {
+        let active = self
+            .property(
+                self.root,
+                self.atoms._NET_ACTIVE_WINDOW,
+                AtomEnum::WINDOW.into(),
+            )
+            .and_then(|reply| reply.value32()?.next())
+            // A window manager with no focused window publishes 0 here.
+            .filter(|handle| *handle != 0)
+            .map(|handle| WindowId(u64::from(handle)));
+
+        Ok(active)
+    }
+
+    fn make_overlay(&mut self, id: WindowId) -> Result<()> {
+        let window = u32::try_from(id.0).map_err(|_| Error::WindowGone(id.0))?;
+
+        let states = [
+            self.atoms._NET_WM_STATE_ABOVE,
+            self.atoms._NET_WM_STATE_SKIP_TASKBAR,
+            self.atoms._NET_WM_STATE_SKIP_PAGER,
+        ];
+
+        // EWMH splits this in two: an unmapped window carries its states in the
+        // property, a mapped one only changes them through a client message.
+        // We cannot tell which side of the mapping we are on, so do both — the
+        // window manager ignores whichever does not apply.
+        self.conn
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                self.atoms._NET_WM_STATE,
+                AtomEnum::ATOM,
+                &states,
+            )
+            .map_err(backend_error)?;
+
+        self.add_window_state(window, states[0], states[1])?;
+        self.add_window_state(window, states[2], 0)?;
+
+        self.conn.flush().map_err(backend_error)?;
+        tracing::debug!(%id, "requested overlay window state");
+        Ok(())
     }
 
     fn focus(&mut self, id: WindowId) -> Result<()> {

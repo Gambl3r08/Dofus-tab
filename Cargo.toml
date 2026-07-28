@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/dofus-core", "crates/dofus-platform", "crates/dofus-cli"]
+members = ["crates/dofus-core", "crates/dofus-platform", "crates/dofus-cli", "crates/dofus-gui"]
 
 [workspace.package]
 version = "0.1.0"
