@@ -1,0 +1,21 @@
+[package]
+name = "dofus-cli"
+description = "Command line interface for Dofus-tab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "dofus-tab"
+path = "src/main.rs"
+
+[dependencies]
+dofus-core.workspace = true
+dofus-platform.workspace = true
+
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

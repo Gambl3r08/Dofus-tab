@@ -1,0 +1,55 @@
+//! Error type shared by the core domain and the platform backends.
+
+use std::path::PathBuf;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// No backend is available for the current session (e.g. a Wayland
+    /// compositor without a supported control interface).
+    #[error("no supported window backend for this session: {0}")]
+    NoBackend(String),
+
+    /// The backend is available but the operation failed.
+    #[error("window backend error: {0}")]
+    Backend(String),
+
+    /// The requested window no longer exists; the caller should re-scan.
+    #[error("window {0} is gone")]
+    WindowGone(u64),
+
+    /// A feature has no implementation on this OS yet.
+    #[error("{0} is not implemented on this platform yet")]
+    Unsupported(&'static str),
+
+    #[error("failed to read {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse {path}: {source}")]
+    Json {
+        path: PathBuf,
+        #[source]
+        source: serde_json::Error,
+    },
+}
+
+impl Error {
+    pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+        Self::Io {
+            path: path.into(),
+            source,
+        }
+    }
+
+    pub fn json(path: impl Into<PathBuf>, source: serde_json::Error) -> Self {
+        Self::Json {
+            path: path.into(),
+            source,
+        }
+    }
+}
