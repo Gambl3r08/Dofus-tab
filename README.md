@@ -1,5 +1,11 @@
 # Dofus-tab
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="packaging/banners/github-banner.png">
+  <source media="(prefers-color-scheme: light)" srcset="packaging/banners/github-banner-light.png">
+  <img src="packaging/banners/github-banner.png" alt="Dofus-tab banner">
+</picture>
+
 Cross-platform window switcher for playing Dofus with several accounts.
 
 It maps every running Dofus client to a numbered tab and lets you jump between
@@ -23,9 +29,36 @@ and input broadcasting are not.
 Requires Rust 1.85 or newer.
 
 ```sh
+./packaging/install.sh
+```
+
+That builds, then installs the binaries into `~/.local/bin`, the icons into
+`~/.local/share/icons` and the desktop entry into `~/.local/share/applications`.
+
+**Installing is not optional on Linux**, at least if you want global hotkeys.
+The XDG desktop portal derives the application identity from the systemd scope
+the launcher puts the process in, and it only accepts that identity if a
+matching desktop entry exists *and* its `Exec` resolves to the binary that is
+running. Start the bar from your application menu, not from a terminal; a
+terminal-launched process inherits the terminal's identity, so the shortcuts end
+up filed under it.
+
+Two details that cost an afternoon to find, in case you fork this:
+
+- The application id must not contain a hyphen. The portal parses the scope name
+  as `app-<id>-<random>`, so `dofus-tab` is ambiguous with the
+  `app-<launcher>-<id>-<random>` form and resolves to an empty id, which the
+  portal rejects with `NotAllowed: An app id is required`. Hence the reverse-DNS
+  `io.github.gambl3r08.DofusTab`.
+- The desktop entry's `Exec` must resolve to the running binary, either as an
+  absolute path or as a bare name that is on `PATH`.
+
+To run from a checkout without installing:
+
+```sh
 cargo build --release
 ./target/release/dofus-tab list        # command line
-./target/release/dofus-tab-bar         # overlay bar + hotkeys
+./target/release/dofus-tab-bar         # overlay bar (hotkeys will not register)
 ```
 
 ## Usage
@@ -63,6 +96,22 @@ one binary covers both ways of switching.
 The bar re-scans every 750 ms on a worker thread, so the UI never blocks on an
 X11 round trip, and clients launched or closed behind its back appear and
 disappear on their own.
+
+### Tray icon
+
+The bar has no title bar and no taskbar entry, so the system tray is where it
+lives. Its menu offers **Settings**, **Show/hide bar** and **Quit**.
+
+Settings opens a second window with the layout controls, applied live as you
+change them, and a read-only list of the hotkeys with the trigger the desktop
+actually assigned to each one. Hotkeys are read-only on purpose: once registered
+they belong to the desktop, and on Linux the portal will not let an application
+reassign them, so an editable field would silently do nothing.
+
+Linux uses the StatusNotifierItem D-Bus specification directly rather than
+`libappindicator`, which is not installed everywhere and would pull in GTK and a
+second main loop. The tray is optional — if the desktop offers none, the bar and
+the hotkeys carry on working.
 
 ### Layout
 
@@ -169,12 +218,6 @@ settings. Deleting the `focus-slot-*` lines from `kglobalshortcutsrc` is not
 enough on its own, and `kglobalaccel`'s `setShortcut` D-Bus method refuses to
 assign keys to portal-owned actions.
 
-> **Packaging note.** The portal derives the application identity from the
-> systemd scope of the calling process, so running `dofus-tab daemon` from a
-> terminal registers the shortcuts under *that terminal's* name in the desktop
-> shortcut settings. Launching it from an installed `.desktop` file or a systemd
-> user unit gives it its own identity.
-
 ## How accounts are identified
 
 The Dofus 3 window title is a constant `"Dofus"` — it contains neither the
@@ -227,6 +270,8 @@ crates/
   dofus-gui/        the always-on-top bar (egui), plus the hotkey listener
     engine.rs         worker thread owning every platform handle
     app.rs            the bar itself
+    tray.rs           system tray icon and menu
+    settings.rs       settings window
 ```
 
 `dofus-core` defines two ports: `WindowManager` (enumerate and focus) and
@@ -315,7 +360,8 @@ All code, comments, documentation and tests are written in English.
 - [x] Linux EWMH backend (X11 and XWayland)
 - [x] `dofus-tab` command line interface
 - [x] Global hotkeys via the XDG `GlobalShortcuts` portal
-- [ ] `.desktop` file and systemd user unit, so the portal sees our own app id
+- [x] `.desktop` file and installer, so the portal sees our own app id
+- [x] Tray icon with a settings window
 - [x] Always-on-top overlay bar
 - [x] Windows backend (Win32) — written and cross-compiling, not yet run
 - [ ] Run and fix the Windows backend on real hardware

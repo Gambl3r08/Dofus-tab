@@ -26,23 +26,36 @@ pub struct Tab {
     pub title: String,
 }
 
-/// Application class of our own overlay window.
+/// Application id of our own windows.
 ///
-/// It contains "dofus", so it has to be excluded explicitly or the bar lists
-/// itself as a tab.
-pub const OWN_APP_CLASS: &str = "dofus-tab";
+/// Reverse-DNS on purpose: the XDG desktop portal parses the systemd scope name
+/// as `app-<id>-<random>`, so an id containing a hyphen — `dofus-tab` — is
+/// ambiguous with the `app-<launcher>-<id>-<random>` form and resolves to an
+/// empty app id. Verified against `xdg-desktop-portal-kde`.
+pub const OWN_APP_ID: &str = "io.github.gambl3r08.DofusTab";
+
+/// Spellings of our own name that must never be taken for a game client.
+///
+/// Our id ends in "DofusTab", which contains "dofus", so the overlay would
+/// otherwise list itself as a tab.
+const OWN_NAMES: [&str; 2] = ["dofustab", "dofus-tab"];
 
 /// Whether a window belongs to a Dofus game client.
 ///
 /// Matches on the application class rather than the title, which is a constant
-/// `"Dofus"`. Neither the launcher (`Ankama Launcher`) nor our own overlay may
-/// match.
+/// `"Dofus"`. The class is the executable-derived name on every backend:
+/// `Dofus.x64` from `WM_CLASS` on X11, `Dofus.exe` from the process image on
+/// Windows. Only the part before the first dot is considered, so a reverse-DNS
+/// id such as our own cannot match on a later segment.
 pub fn looks_like_dofus(window: &GameWindow) -> bool {
     let class = window.app_class.to_ascii_lowercase();
-    class.contains("dofus")
-        && !class.contains("ankama")
-        && !class.contains("zaap")
-        && !class.contains(OWN_APP_CLASS)
+
+    if OWN_NAMES.iter().any(|own| class.contains(own)) {
+        return false;
+    }
+
+    let name = class.split('.').next().unwrap_or_default();
+    name.starts_with("dofus") && !class.contains("ankama") && !class.contains("zaap")
 }
 
 /// Builds the ordered tab list from a window scan.
@@ -192,8 +205,24 @@ mod tests {
 
     #[test]
     fn our_own_overlay_is_never_listed_as_a_tab() {
-        assert!(!looks_like_dofus(&window(1, 1, OWN_APP_CLASS)));
+        assert!(!looks_like_dofus(&window(1, 1, OWN_APP_ID)));
         assert!(!looks_like_dofus(&window(1, 1, "Dofus-tab")));
+        assert!(!looks_like_dofus(&window(1, 1, "dofustab")));
+        assert!(!looks_like_dofus(&window(1, 1, "dofus-tab-bar.exe")));
+    }
+
+    #[test]
+    fn the_windows_executable_name_matches_too() {
+        assert!(looks_like_dofus(&window(1, 1, "Dofus.exe")));
+        assert!(!looks_like_dofus(&window(1, 1, "Ankama Launcher.exe")));
+        assert!(!looks_like_dofus(&window(1, 1, "zaap.exe")));
+    }
+
+    #[test]
+    fn a_later_segment_of_a_reverse_dns_id_never_matches() {
+        // Only the part before the first dot counts, so an unrelated vendor id
+        // that happens to end in "dofus" is not a game client.
+        assert!(!looks_like_dofus(&window(1, 1, "com.example.dofus")));
     }
 
     #[test]

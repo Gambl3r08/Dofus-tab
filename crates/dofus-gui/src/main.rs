@@ -5,6 +5,8 @@
 
 mod app;
 mod engine;
+mod settings;
+mod tray;
 
 use anyhow::{Context, Result};
 use dofus_core::config::Config;
@@ -14,6 +16,11 @@ use tracing_subscriber::EnvFilter;
 /// Width used before the first resize; the bar fits itself to its content.
 const INITIAL_WIDTH: f32 = 480.0;
 
+/// Window icon, embedded so the binary needs no data files beside it.
+pub const ICON_PNG: &[u8] = include_bytes!(
+    "../../../packaging/icons/hicolor/256x256/apps/io.github.gambl3r08.DofusTab.png"
+);
+
 fn main() -> Result<()> {
     init_tracing();
 
@@ -21,7 +28,9 @@ fn main() -> Result<()> {
 
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Dofus-tab")
-        .with_app_id("dofus-tab")
+        // Must match the installed .desktop file name, which is how the
+        // desktop associates the window with its icon and its shortcuts.
+        .with_app_id(dofus_core::registry::OWN_APP_ID)
         .with_inner_size([INITIAL_WIDTH, app::INITIAL_HEIGHT])
         .with_decorations(false)
         .with_always_on_top()
@@ -32,6 +41,11 @@ fn main() -> Result<()> {
 
     if let Some(position) = config.overlay_position {
         viewport = viewport.with_position(position);
+    }
+
+    match eframe::icon_data::from_png_bytes(ICON_PNG) {
+        Ok(icon) => viewport = viewport.with_icon(icon),
+        Err(error) => tracing::warn!(%error, "could not decode the window icon"),
     }
 
     let native_options = eframe::NativeOptions {
@@ -45,8 +59,16 @@ fn main() -> Result<()> {
         native_options,
         Box::new(move |cc| {
             let ctx = cc.egui_ctx.clone();
-            let engine = engine::spawn(move || ctx.request_repaint());
+            let engine = engine::spawn({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            });
             engine::spawn_hotkeys(engine.clone());
+
+            let tray = tray::spawn({
+                let ctx = ctx.clone();
+                move || ctx.request_repaint()
+            });
 
             // winit maps `WindowLevel::AlwaysOnTop` to nothing usable on this
             // window manager, so the hints are applied through our own EWMH
@@ -56,7 +78,7 @@ fn main() -> Result<()> {
                 None => tracing::warn!("could not read our own window handle"),
             }
 
-            Ok(Box::new(app::BarApp::new(engine, config)))
+            Ok(Box::new(app::BarApp::new(engine, config, tray)))
         }),
     )
     .map_err(|error| anyhow::anyhow!("could not start the overlay: {error}"))

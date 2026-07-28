@@ -38,13 +38,15 @@ pub struct EngineState {
     pub active: Option<WindowId>,
     /// Last error, shown in the bar instead of silently rendering nothing.
     pub error: Option<String>,
+    /// What the desktop assigned to each hotkey, shown in the settings window.
+    pub shortcuts: Vec<hotkey::RegisteredShortcut>,
 }
 
 /// Handle the UI keeps to talk to the worker.
 #[derive(Clone)]
 pub struct EngineHandle {
     commands: Sender<Command>,
-    state: Arc<Mutex<EngineState>>,
+    pub(crate) state: Arc<Mutex<EngineState>>,
 }
 
 impl EngineHandle {
@@ -104,7 +106,7 @@ pub fn spawn_hotkeys(handle: EngineHandle) {
                 return;
             }
 
-            warn_about_inert_shortcuts(hotkeys.as_mut());
+            publish_shortcuts(hotkeys.as_mut(), &handle);
 
             let result = hotkeys.listen(&mut |action| {
                 let hotkey::Action::FocusSlot(slot) = action;
@@ -118,11 +120,12 @@ pub fn spawn_hotkeys(handle: EngineHandle) {
         .expect("the hotkey thread should start");
 }
 
-/// Logs shortcuts the desktop accepted but left without a key.
-fn warn_about_inert_shortcuts(hotkeys: &mut dyn hotkey::HotkeyManager) {
+/// Records what the desktop assigned, and warns about anything left inert.
+fn publish_shortcuts(hotkeys: &mut dyn hotkey::HotkeyManager, handle: &EngineHandle) {
     let Ok(registered) = hotkeys.registered() else {
         return;
     };
+
     let inert = registered.iter().filter(|s| !s.is_active()).count();
     if inert > 0 {
         tracing::warn!(
@@ -131,6 +134,12 @@ fn warn_about_inert_shortcuts(hotkeys: &mut dyn hotkey::HotkeyManager) {
             "some shortcuts have no key assigned and will never fire"
         );
     }
+
+    handle
+        .state
+        .lock()
+        .expect("engine state mutex was poisoned")
+        .shortcuts = registered;
 }
 
 /// Worker loop: serve commands, and re-scan whenever the queue goes quiet.

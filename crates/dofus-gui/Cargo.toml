@@ -22,4 +22,5 @@ eframe = "0.32.3"
 raw-window-handle = "0.6.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
 winit = "0.30.13"

@@ -10,6 +10,8 @@ use dofus_core::layout::{self, Orientation};
 use eframe::egui;
 
 use crate::engine::{Command, EngineHandle};
+use crate::settings::SettingsWindow;
+use crate::tray::{TrayCommand, TrayHandle};
 
 /// Height of one tab button.
 const BUTTON_HEIGHT: f32 = 26.0;
@@ -44,10 +46,15 @@ pub struct BarApp {
     requested_size: egui::Vec2,
     /// Position observed on the previous frame, persisted on exit.
     position: Option<[f32; 2]>,
+    /// `None` when the desktop offers no system tray.
+    tray: Option<TrayHandle>,
+    settings: SettingsWindow,
+    /// Whether the bar itself is shown; toggled from the tray.
+    visible: bool,
 }
 
 impl BarApp {
-    pub fn new(engine: EngineHandle, config: Config) -> Self {
+    pub fn new(engine: EngineHandle, config: Config, tray: Option<TrayHandle>) -> Self {
         let (orientation, wrap_at) = config.overlay_layout();
         Self {
             engine,
@@ -56,6 +63,33 @@ impl BarApp {
             wrap_at,
             requested_size: egui::Vec2::ZERO,
             position: None,
+            tray,
+            settings: SettingsWindow::default(),
+            visible: true,
+        }
+    }
+
+    /// Applies whatever the user picked from the tray menu.
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        let Some(tray) = &self.tray else {
+            return;
+        };
+
+        for command in tray.drain() {
+            match command {
+                TrayCommand::ShowSettings => {
+                    // Refresh the hotkey list every time it is opened; the
+                    // engine only learns it once registration has happened.
+                    let shortcuts = self.engine.with_state(|state| state.shortcuts.clone());
+                    self.settings.set_shortcuts(shortcuts);
+                    self.settings.open();
+                }
+                TrayCommand::ToggleBar => {
+                    self.visible = !self.visible;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Visible(self.visible));
+                }
+                TrayCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            }
         }
     }
 
@@ -168,6 +202,14 @@ impl eframe::App for BarApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_tray(ctx);
+
+        if self.settings.show(ctx, &mut self.config).layout_changed {
+            let (orientation, wrap_at) = self.config.overlay_layout();
+            self.orientation = orientation;
+            self.wrap_at = wrap_at;
+        }
+
         self.track_position(ctx);
 
         // Snapshot first, so the mutex is released before any drawing.
