@@ -6,9 +6,10 @@ It maps every running Dofus client to a numbered tab and lets you jump between
 them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
-> **Status:** v0. The overlay bar, the command line interface, the Linux/X11
-> backend and global hotkeys work end to end. The Windows and macOS backends are
-> not implemented yet — see [Roadmap](#roadmap).
+> **Status:** v0. On Linux the overlay bar, the command line interface, the X11
+> backend and global hotkeys work end to end. The Windows backend is written and
+> cross-compiles, but has not been run on Windows yet. macOS is not started —
+> see [Roadmap](#roadmap).
 
 ## Scope
 
@@ -219,6 +220,8 @@ crates/
   dofus-platform/   OS adapters implementing the ports
     linux/x11.rs      EWMH backend (X11 sessions and XWayland clients)
     linux/portal.rs   global hotkeys via the XDG GlobalShortcuts portal
+    windows/window.rs Win32 backend
+    windows/hotkeys.rs global hotkeys via RegisterHotKey
     process.rs        reading another process' command line
   dofus-cli/        the command line interface
   dofus-gui/        the always-on-top bar (egui), plus the hotkey listener
@@ -251,12 +254,42 @@ Global hotkeys should go through the XDG `GlobalShortcuts` portal rather than
 `XGrabKey`: an X11 grab only fires while focus sits in an X11 or XWayland
 client, so it would miss keystrokes typed in native Wayland applications.
 
-### Windows and macOS
+### Windows
 
-Not implemented yet. The account identification chain is expected to carry over
+Implemented but **not yet run on a Windows machine**; it is verified only by
+cross-compilation (`cargo check --target x86_64-pc-windows-msvc`) and by the
+unit tests that cover its pure logic. Treat it as untested until someone
+launches it there.
+
+Two differences from Linux are worth knowing:
+
+- **The window class is useless.** Every Unity game reports `UnityWndClass`, so
+  the backend fills `GameWindow::app_class` with the process image name
+  (`Dofus.exe`) instead. That matches what X11 exposes through `WM_CLASS`, which
+  is itself derived from the executable, so the shared filtering in `dofus-core`
+  needs no platform branch.
+- **Focus needs a handover.** Windows only lets the foreground process give
+  focus away, so `focus` attaches its input queue to the current foreground
+  thread with `AttachThreadInput` for the duration of the call. Minimised
+  windows are restored first, since they cannot take focus otherwise.
+
+Global hotkeys use `RegisterHotKey`, which needs no permission prompt but does
+require registration and the message loop to run on the same thread — so
+`bind` only records the bindings and `listen` performs the registration. A
+combination already owned by another application fails to register and is
+reported by `doctor` as having no trigger, the same way an inert portal shortcut
+is on Linux.
+
+Command lines go through `sysinfo` rather than hand-rolled
+`NtQueryInformationProcess` plus `ReadProcessMemory` on the PEB. That is the
+part of this platform most likely to be subtly wrong — WOW64 mismatches, access
+rights — and the least pleasant to debug remotely.
+
+### macOS
+
+Not started. The account identification chain is expected to carry over
 unchanged, because the launcher is the same Electron application on all three
-platforms and stores its settings at `%APPDATA%\zaap\Settings` and
-`~/Library/Application Support/zaap/Settings` respectively.
+platforms and stores its settings at `~/Library/Application Support/zaap/Settings`.
 
 ## Development
 
@@ -264,6 +297,14 @@ platforms and stores its settings at `%APPDATA%\zaap\Settings` and
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
+```
+
+Platform code that cannot be run locally is still type-checked and linted, which
+catches most of what compiling would:
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
 ```
 
 All code, comments, documentation and tests are written in English.
@@ -276,7 +317,8 @@ All code, comments, documentation and tests are written in English.
 - [x] Global hotkeys via the XDG `GlobalShortcuts` portal
 - [ ] `.desktop` file and systemd user unit, so the portal sees our own app id
 - [x] Always-on-top overlay bar
-- [ ] Windows backend (Win32)
+- [x] Windows backend (Win32) — written and cross-compiling, not yet run
+- [ ] Run and fix the Windows backend on real hardware
 - [ ] macOS backend (Accessibility API)
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
 

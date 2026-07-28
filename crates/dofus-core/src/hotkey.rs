@@ -103,6 +103,53 @@ pub fn bindings(max_slots: u32, overrides: &BTreeMap<u32, String>) -> Vec<Hotkey
         .collect()
 }
 
+/// A trigger broken down into modifiers and a key.
+///
+/// The freedesktop syntax used in [`HotkeyBinding::trigger`] is what the XDG
+/// portal wants, but backends that register hotkeys themselves — Win32
+/// `RegisterHotKey`, macOS `RegisterEventHotKey` — need the parts separately.
+/// Parsing lives here so it is tested once rather than per platform.
+#[derive(Clone, PartialEq, Eq, Debug, Default)]
+pub struct Trigger {
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
+    /// The Windows / Command / Super key.
+    pub logo: bool,
+    /// Key name as written, e.g. `1` or `F2`. Never a modifier.
+    pub key: String,
+}
+
+/// Parses a trigger such as `CTRL+SHIFT+F2`.
+///
+/// Modifier names are matched case-insensitively and accept the common
+/// spellings. Returns `None` when there is no key, more than one key, or an
+/// empty segment.
+pub fn parse_trigger(trigger: &str) -> Option<Trigger> {
+    let mut parsed = Trigger::default();
+    let mut key = None;
+
+    for segment in trigger.split('+') {
+        let segment = segment.trim();
+        if segment.is_empty() {
+            return None;
+        }
+
+        match segment.to_ascii_uppercase().as_str() {
+            "CTRL" | "CONTROL" => parsed.ctrl = true,
+            "ALT" | "OPTION" => parsed.alt = true,
+            "SHIFT" => parsed.shift = true,
+            "LOGO" | "SUPER" | "META" | "WIN" | "CMD" | "COMMAND" => parsed.logo = true,
+            // Anything else is the key, and there may only be one.
+            _ if key.is_some() => return None,
+            _ => key = Some(segment.to_owned()),
+        }
+    }
+
+    parsed.key = key?;
+    Some(parsed)
+}
+
 /// What the desktop actually assigned to one of our shortcuts.
 ///
 /// A registered shortcut is not necessarily a working one: a desktop may accept
@@ -188,6 +235,66 @@ mod tests {
         assert_eq!(bound[0].trigger, "ALT+1");
         assert_eq!(bound[1].trigger, "CTRL+F2");
         assert_eq!(bound[2].trigger, "ALT+3");
+    }
+
+    #[test]
+    fn every_default_trigger_parses_back() {
+        for binding in bindings(DEFAULT_MAX_SLOTS, &BTreeMap::new()) {
+            let parsed = parse_trigger(&binding.trigger)
+                .unwrap_or_else(|| panic!("{} should parse", binding.trigger));
+            let Action::FocusSlot(slot) = binding.action;
+
+            assert!(parsed.alt, "{} should use Alt", binding.trigger);
+            assert!(!parsed.ctrl && !parsed.shift && !parsed.logo);
+            assert_eq!(parsed.key, slot.to_string());
+        }
+    }
+
+    #[test]
+    fn modifiers_are_case_insensitive_and_accept_aliases() {
+        let parsed = parse_trigger("control+Shift+SUPER+f2").expect("should parse");
+        assert!(parsed.ctrl && parsed.shift && parsed.logo);
+        assert!(!parsed.alt);
+        assert_eq!(parsed.key, "f2");
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_ignored() {
+        assert_eq!(
+            parse_trigger(" CTRL + F1 ").expect("should parse").key,
+            "F1"
+        );
+    }
+
+    #[test]
+    fn a_bare_key_needs_no_modifier() {
+        let parsed = parse_trigger("F12").expect("should parse");
+        assert_eq!(parsed.key, "F12");
+        assert_eq!(
+            parsed,
+            Trigger {
+                key: "F12".into(),
+                ..Trigger::default()
+            }
+        );
+    }
+
+    #[test]
+    fn triggers_without_a_key_are_rejected() {
+        assert_eq!(parse_trigger("CTRL+ALT"), None);
+        assert_eq!(parse_trigger("SHIFT"), None);
+    }
+
+    #[test]
+    fn triggers_with_two_keys_are_rejected() {
+        assert_eq!(parse_trigger("CTRL+A+B"), None);
+    }
+
+    #[test]
+    fn malformed_triggers_are_rejected() {
+        assert_eq!(parse_trigger(""), None);
+        assert_eq!(parse_trigger("CTRL+"), None);
+        assert_eq!(parse_trigger("+A"), None);
     }
 
     #[test]

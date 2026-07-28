@@ -70,8 +70,13 @@ fn own_window_id(cc: &eframe::CreationContext<'_>) -> Option<dofus_core::WindowI
 
     let handle = cc.window_handle().ok()?;
     match handle.as_raw() {
-        RawWindowHandle::Xlib(xlib) => Some(dofus_core::WindowId(xlib.window)),
+        // The Xlib window type is 32 bits wide on some targets and 64 on
+        // others, so the cast is needed on one and redundant on the other.
+        // There is no spelling that satisfies both, hence the allow.
+        #[allow(clippy::unnecessary_cast)]
+        RawWindowHandle::Xlib(xlib) => Some(dofus_core::WindowId(xlib.window as u64)),
         RawWindowHandle::Xcb(xcb) => Some(dofus_core::WindowId(u64::from(xcb.window.get()))),
+        RawWindowHandle::Win32(win32) => Some(dofus_core::WindowId(win32.hwnd.get() as u64)),
         other => {
             tracing::debug!(?other, "unsupported window handle");
             None

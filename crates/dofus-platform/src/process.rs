@@ -30,7 +30,37 @@ pub fn cmdline(pid: u32) -> Result<Vec<String>> {
         .collect())
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Reads a command line through `sysinfo`.
+///
+/// The Win32 way is `NtQueryInformationProcess` plus `ReadProcessMemory` on the
+/// PEB, which has to get WOW64 mismatches and access rights right. That is
+/// exactly the kind of code that fails subtly, so a well-tested crate does it
+/// instead.
+#[cfg(target_os = "windows")]
+pub fn cmdline(pid: u32) -> Result<Vec<String>> {
+    use dofus_core::Error;
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+
+    let pid = Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
+    );
+
+    let process = system
+        .process(pid)
+        .ok_or_else(|| Error::Backend(format!("process {pid} is gone")))?;
+
+    Ok(process
+        .cmd()
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn cmdline(_pid: u32) -> Result<Vec<String>> {
     Err(dofus_core::Error::Unsupported(
         "reading a process command line",
