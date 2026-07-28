@@ -12,6 +12,7 @@
 use anyhow::{Context, Result, bail};
 use dofus_core::config::{self, Config};
 use dofus_core::hotkey;
+use dofus_core::instance;
 use dofus_core::launcher::{self, AccountDirectory};
 use dofus_core::registry::{self, Tab};
 
@@ -152,6 +153,11 @@ pub fn save_order() -> Result<()> {
 
 /// Registers the global hotkeys and focuses tabs until interrupted.
 pub fn daemon() -> Result<()> {
+    // Taken before anything else: two processes registering the same shortcuts
+    // is a silent failure on every platform, so refuse early and say why.
+    let _lock =
+        instance::acquire(instance::HOTKEY_LOCK).context("could not start the hotkey daemon")?;
+
     let config = Config::load().context("could not read the Dofus-tab config")?;
     let bindings = config.hotkey_bindings();
     if bindings.is_empty() {

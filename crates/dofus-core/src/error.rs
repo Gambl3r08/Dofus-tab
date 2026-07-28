@@ -28,6 +28,13 @@ pub enum Error {
     #[error("window {0} is gone")]
     WindowGone(u64),
 
+    /// Another Dofus-tab process already holds the named lock.
+    #[error(
+        "another Dofus-tab process is already running ({0}); the overlay bar and \
+         `dofus-tab daemon` cannot register the hotkeys at the same time"
+    )]
+    AlreadyRunning(String),
+
     /// A feature has no implementation on this OS yet.
     #[error("{0} is not implemented on this platform yet")]
     Unsupported(&'static str),

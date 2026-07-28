@@ -25,7 +25,8 @@ and input broadcasting are not.
 
 ## Install
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.89 or newer — that is where the standard library gained the file
+locking used to stop two processes registering the hotkeys at once.
 
 ```sh
 ./packaging/install.sh
@@ -112,6 +113,8 @@ Settings opens a second window with three sections:
   remembered position of any that are not.
 - **Layout** — direction and wrap point, applied to the bar as you change them,
   with a preview of the resulting grid.
+- **Startup** — start Dofus-tab with the desktop session. Applied immediately
+  rather than on Save, because it writes a file outside our own config.
 - **Hotkeys** — read-only, showing the trigger the desktop actually assigned to
   each slot. Read-only on purpose: once registered they belong to the desktop,
   and on Linux the portal will not let an application reassign them, so an
@@ -397,11 +400,19 @@ CI runs the tests and clippy **natively on Linux, Windows and macOS**. That
 matters more here than in most projects: the Windows and macOS backends are
 developed on Linux, so without native jobs they would only ever be type-checked.
 
-### Known constraint
+### One hotkey owner at a time
 
-`dofus-tab daemon` and `dofus-tab-bar` both register the same global shortcuts,
-so running the two at once is not supported. Use the bar, which does everything
-the daemon does and adds the tray.
+`dofus-tab daemon` and `dofus-tab-bar` both register the same global shortcuts.
+Run together they fight over them: on Linux the portal hands the same slots to
+two sessions and every keypress switches twice, on Windows the second
+`RegisterHotKey` simply fails. Neither reports anything useful on its own.
+
+Whichever starts second therefore refuses to register, and says so. The guard is
+an advisory file lock rather than a pid file, because the operating system
+releases it however the holder dies — a pid file left by a crash would lock the
+user out until they deleted it by hand.
+
+The bar does everything the daemon does and adds the tray, so prefer it.
 
 Platform code that cannot be run locally is still type-checked and linted, which
 catches most of what compiling would:
@@ -433,8 +444,8 @@ All code, comments, documentation and tests are written in English.
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
 - [ ] Tray icon on Windows and macOS
 - [ ] Embed the `.ico` in the Windows executable
-- [ ] Autostart entry
-- [ ] Refuse to run the daemon while the bar is already running
+- [x] Autostart entry (Linux; Windows and macOS still to do)
+- [x] Refuse to register hotkeys twice at once
 
 ## License
 

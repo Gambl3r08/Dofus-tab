@@ -22,6 +22,7 @@ pub mod config;
 pub mod error;
 pub mod hotkey;
 pub mod identity;
+pub mod instance;
 pub mod launcher;
 pub mod layout;
 pub mod registry;

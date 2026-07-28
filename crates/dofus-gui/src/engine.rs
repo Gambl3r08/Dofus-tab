@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use dofus_core::config::Config;
 use dofus_core::hotkey;
+use dofus_core::instance;
 use dofus_core::launcher::AccountDirectory;
 use dofus_core::registry::{self, Tab};
 use dofus_core::{ProcessInspector, WindowId, WindowManager};
@@ -104,6 +105,15 @@ pub fn spawn_hotkeys(handle: EngineHandle) {
     thread::Builder::new()
         .name("dofus-tab-hotkeys".to_string())
         .spawn(move || {
+            // Held for the lifetime of the thread; see `dofus_core::instance`.
+            let _lock = match instance::acquire(instance::HOTKEY_LOCK) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    tracing::warn!(%error, "not registering hotkeys");
+                    return;
+                }
+            };
+
             let config = Config::load().unwrap_or_default();
             let bindings = config.hotkey_bindings();
 

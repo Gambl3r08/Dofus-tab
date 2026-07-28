@@ -19,6 +19,7 @@
 //! Native-Wayland backends (KWin, Hyprland, wlroots) are planned for the day
 //! that default changes, and for clients started with `-force-wayland`.
 
+pub mod autostart;
 pub mod process;
 
 #[cfg(target_os = "linux")]

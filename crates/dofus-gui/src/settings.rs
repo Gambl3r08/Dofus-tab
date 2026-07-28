@@ -44,6 +44,8 @@ pub struct SettingsWindow {
     shortcuts: Vec<RegisteredShortcut>,
     /// Tabs with a resolved account, in their current order.
     tabs: Vec<TabRow>,
+    /// Last failure when toggling autostart, shown next to the checkbox.
+    autostart_error: Option<String>,
 }
 
 /// What the bar should do after the settings window was drawn.
@@ -151,6 +153,14 @@ impl SettingsWindow {
         ui.separator();
         ui.add_space(6.0);
 
+        ui.heading("Startup");
+        ui.add_space(4.0);
+        self.draw_autostart(ui);
+
+        ui.add_space(12.0);
+        ui.separator();
+        ui.add_space(6.0);
+
         ui.heading("Hotkeys");
         ui.add_space(4.0);
         self.draw_shortcuts(ui);
@@ -248,6 +258,32 @@ impl SettingsWindow {
         ui.weak("An empty name restores the nickname from the launcher.");
 
         changed
+    }
+
+    /// Start-with-the-session toggle.
+    ///
+    /// Applied immediately rather than on Save: it writes a file outside our
+    /// own config, so pretending it is part of the same transaction would be a
+    /// lie.
+    fn draw_autostart(&mut self, ui: &mut egui::Ui) {
+        if !dofus_platform::autostart::is_supported() {
+            ui.weak("Starting with the session is not supported on this platform yet.");
+            return;
+        }
+
+        let mut enabled = dofus_platform::autostart::is_enabled();
+        if ui
+            .checkbox(&mut enabled, "Start Dofus-tab when I log in")
+            .changed()
+            && let Err(error) = dofus_platform::autostart::set_enabled(enabled)
+        {
+            tracing::warn!(%error, "could not change the autostart entry");
+            self.autostart_error = Some(error.to_string());
+        }
+
+        if let Some(error) = &self.autostart_error {
+            ui.colored_label(ui.visuals().error_fg_color, error);
+        }
     }
 
     fn draw_shortcuts(&self, ui: &mut egui::Ui) {

@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/gambl3r08/Dofus-tab"
-rust-version = "1.85"
+rust-version = "1.89"
 
 [workspace.dependencies]
 dofus-core = { path = "crates/dofus-core" }
