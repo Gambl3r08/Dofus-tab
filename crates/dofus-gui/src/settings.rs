@@ -1,3 +1,12 @@
+// Dofus-tab, a cross-platform window switcher for Dofus multi-accounting.
+// Copyright (C) 2026 Roberto Lozada
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version. It comes with ABSOLUTELY NO WARRANTY. See the LICENSE file for the
+// full text.
+
 //! Settings window, opened from the tray menu.
 //!
 //! Shown as a second egui viewport rather than a separate process, so it shares
@@ -148,6 +157,15 @@ impl SettingsWindow {
 
         ui.add_space(12.0);
         ui.separator();
+        ui.add_space(6.0);
+
+        ui.horizontal(|ui| {
+            ui.weak(concat!(
+                "Dofus-tab ",
+                env!("CARGO_PKG_VERSION"),
+                " - free software under the GNU GPL v3 or later, with no warranty."
+            ));
+        });
         ui.add_space(6.0);
 
         ui.horizontal(|ui| {

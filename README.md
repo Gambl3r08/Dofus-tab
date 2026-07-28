@@ -438,4 +438,17 @@ All code, comments, documentation and tests are written in English.
 
 ## License
 
-MIT OR Apache-2.0
+Copyright (C) 2026 Roberto Lozada.
+
+Dofus-tab is free software under the **GNU General Public License, version 3 or
+later**. See [LICENSE](LICENSE) for the full text.
+
+You may use it, study it, change it and share it. What the licence asks in
+return is reciprocity: if you distribute a modified version, it has to be free
+software too, under the same terms, with its source available. That is a
+deliberate choice — this project exists because the tools that came before it
+were closed, and it should not be possible to take this work, close it and sell
+it back to the same players.
+
+Using it, including in a commercial setting, costs nothing and requires nothing.
+The obligation only ever applies to whoever *distributes* a derivative.

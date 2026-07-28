@@ -1,3 +1,12 @@
+// Dofus-tab, a cross-platform window switcher for Dofus multi-accounting.
+// Copyright (C) 2026 Roberto Lozada
+//
+// This program is free software: you can redistribute it and/or modify it under
+// the terms of the GNU General Public License as published by the Free Software
+// Foundation, either version 3 of the License, or (at your option) any later
+// version. It comes with ABSOLUTELY NO WARRANTY. See the LICENSE file for the
+// full text.
+
 //! Command line front end for Dofus-tab.
 //!
 //! This is the v0 surface: it exercises the whole platform layer (enumerate,
@@ -14,7 +23,9 @@ use tracing_subscriber::EnvFilter;
 #[command(
     name = "dofus-tab",
     version,
-    about = "Switch between Dofus client windows from the command line"
+    about = "Switch between Dofus client windows from the command line",
+    after_help = "Dofus-tab is free software under the GNU GPL version 3 or later, \
+and comes with ABSOLUTELY NO WARRANTY."
 )]
 struct Cli {
     /// Print backend diagnostics to stderr.
