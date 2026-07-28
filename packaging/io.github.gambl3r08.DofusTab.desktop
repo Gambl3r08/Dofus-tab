@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Dofus-tab
+GenericName=Dofus window switcher
+Comment=Switch between Dofus client windows with global hotkeys
+Exec=dofus-tab-bar
+Icon=dofus-tab
+Terminal=false
+Categories=Game;Utility;
+Keywords=dofus;multiaccount;window;switcher;
+StartupNotify=false
