@@ -18,6 +18,9 @@ pub mod linux;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+#[cfg(target_os = "macos")]
+pub mod macos;
+
 use dofus_core::{ProcessInspector, Result, WindowManager};
 
 /// Connects to the best available window backend for the current session.
@@ -44,7 +47,13 @@ pub fn detect_window_manager() -> Result<Box<dyn WindowManager>> {
 }
 
 /// Connects to the best available window backend for the current session.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn detect_window_manager() -> Result<Box<dyn WindowManager>> {
+    Ok(Box::new(macos::window::MacBackend::connect()?))
+}
+
+/// Connects to the best available window backend for the current session.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn detect_window_manager() -> Result<Box<dyn WindowManager>> {
     Err(dofus_core::Error::Unsupported(
         "window management on this operating system",
@@ -70,7 +79,13 @@ pub fn detect_hotkey_manager() -> Result<Box<dyn dofus_core::hotkey::HotkeyManag
 }
 
 /// Connects to the global hotkey provider for the current session.
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+pub fn detect_hotkey_manager() -> Result<Box<dyn dofus_core::hotkey::HotkeyManager>> {
+    Ok(Box::new(macos::hotkeys::MacHotkeys::connect()?))
+}
+
+/// Connects to the global hotkey provider for the current session.
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn detect_hotkey_manager() -> Result<Box<dyn dofus_core::hotkey::HotkeyManager>> {
     Err(dofus_core::Error::Unsupported(
         "global hotkeys on this operating system",

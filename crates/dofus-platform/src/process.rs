@@ -32,11 +32,13 @@ pub fn cmdline(pid: u32) -> Result<Vec<String>> {
 
 /// Reads a command line through `sysinfo`.
 ///
-/// The Win32 way is `NtQueryInformationProcess` plus `ReadProcessMemory` on the
-/// PEB, which has to get WOW64 mismatches and access rights right. That is
-/// exactly the kind of code that fails subtly, so a well-tested crate does it
-/// instead.
-#[cfg(target_os = "windows")]
+/// Both platforms need privileged-feeling APIs to read another process'
+/// arguments — `NtQueryInformationProcess` plus `ReadProcessMemory` on the PEB
+/// on Windows, `sysctl(KERN_PROCARGS2)` on macOS — and both have to get corner
+/// cases right that are invisible until they break: WOW64 mismatches, access
+/// rights, the undocumented layout of the argument block. A well-tested crate
+/// does it instead.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub fn cmdline(pid: u32) -> Result<Vec<String>> {
     use dofus_core::Error;
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -60,7 +62,7 @@ pub fn cmdline(pid: u32) -> Result<Vec<String>> {
         .collect())
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 pub fn cmdline(_pid: u32) -> Result<Vec<String>> {
     Err(dofus_core::Error::Unsupported(
         "reading a process command line",

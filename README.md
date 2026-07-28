@@ -12,10 +12,9 @@ It maps every running Dofus client to a numbered tab and lets you jump between
 them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
-> **Status:** v0. On Linux the overlay bar, the command line interface, the X11
-> backend and global hotkeys work end to end. The Windows backend is written and
-> cross-compiles, but has not been run on Windows yet. macOS is not started —
-> see [Roadmap](#roadmap).
+> **Status:** v0. On Linux everything works end to end. The Windows and macOS
+> backends are written and cross-compile, but have not been run on those systems
+> yet; macOS additionally has no global hotkeys. See [Roadmap](#roadmap).
 
 ## Scope
 
@@ -265,6 +264,8 @@ crates/
     linux/portal.rs   global hotkeys via the XDG GlobalShortcuts portal
     windows/window.rs Win32 backend
     windows/hotkeys.rs global hotkeys via RegisterHotKey
+    macos/window.rs   AppKit backend (applications, not windows)
+    macos/hotkeys.rs  stub; see the macOS notes
     process.rs        reading another process' command line
   dofus-cli/        the command line interface
   dofus-gui/        the always-on-top bar (egui), plus the hotkey listener
@@ -332,9 +333,44 @@ rights — and the least pleasant to debug remotely.
 
 ### macOS
 
-Not started. The account identification chain is expected to carry over
-unchanged, because the launcher is the same Electron application on all three
-platforms and stores its settings at `~/Library/Application Support/zaap/Settings`.
+Window switching is implemented but **not yet run on a Mac**; like Windows, it
+is verified only by cross-compilation (`cargo check --target
+aarch64-apple-darwin`). Global hotkeys are **not** implemented — see below.
+
+**The backend enumerates applications, not windows**, and uses the process id as
+the window handle. That is not a shortcut; it is what the platform rewards:
+
+- Every Dofus client is its own process, so one application is one account, and
+  focusing the application is exactly what the user wants.
+- `NSRunningApplication::activate` needs no permission, whereas per-window
+  control means the Accessibility API, which the user must grant by hand and
+  which silently returns nothing until they do.
+- Reading window titles through `CGWindowListCopyWindowInfo` needs the Screen
+  Recording permission, and titles are useless for identification anyway.
+
+The limitation is that a client showing several windows would collapse into one
+tab. Dofus shows one main window per client, so this holds in practice.
+
+`make_overlay` is a no-op on macOS: unlike X11, winit's always-on-top window
+level does reach AppKit, so there is nothing to patch up.
+
+**Why there are no hotkeys yet.** Carbon's `RegisterEventHotKey` needs no
+permission, but it delivers through the application's Carbon event target, which
+is only pumped by a `CFRunLoop` on the **main thread**. The `HotkeyManager`
+contract is a blocking `listen` called from a worker thread — what the X11 and
+Win32 backends do and what both front ends are built around. On macOS that
+thread would never receive anything, and the failure mode is silence, which is
+exactly the bug class that already cost this project an afternoon on KDE.
+
+Fixing it means restructuring the front ends so the listener owns the main
+thread, or handing registration to whatever already owns it: winit's event loop
+in the bar, a `CFRunLoop` in the CLI daemon. That is a design change rather than
+a missing function, and not something to guess at without a Mac. The backend
+therefore returns a clear `Unsupported` error rather than failing quietly.
+
+The account identification chain is expected to carry over unchanged, because
+the launcher is the same Electron application on all three platforms and stores
+its settings at `~/Library/Application Support/zaap/Settings`.
 
 ## Development
 
@@ -348,8 +384,9 @@ Platform code that cannot be run locally is still type-checked and linted, which
 catches most of what compiling would:
 
 ```sh
-rustup target add x86_64-pc-windows-msvc
+rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
 cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warnings
 ```
 
 All code, comments, documentation and tests are written in English.
@@ -365,7 +402,9 @@ All code, comments, documentation and tests are written in English.
 - [x] Always-on-top overlay bar
 - [x] Windows backend (Win32) — written and cross-compiling, not yet run
 - [ ] Run and fix the Windows backend on real hardware
-- [ ] macOS backend (Accessibility API)
+- [x] macOS window backend (AppKit) — written and cross-compiling, not yet run
+- [ ] Run and fix the macOS backend on real hardware
+- [ ] macOS global hotkeys (needs a main-thread run loop)
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
 
 ## License
