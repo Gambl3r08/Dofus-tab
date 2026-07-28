@@ -5,12 +5,14 @@
 //! Everything expensive happens on the engine thread, so `update` only reads a
 //! snapshot.
 
+use std::time::{Duration, Instant};
+
 use dofus_core::config::Config;
 use dofus_core::layout::{self, Orientation};
 use eframe::egui;
 
 use crate::engine::{Command, EngineHandle};
-use crate::settings::SettingsWindow;
+use crate::settings::{SettingsWindow, TabRow};
 use crate::tray::{TrayCommand, TrayHandle};
 
 /// Height of one tab button.
@@ -25,6 +27,11 @@ const MARGIN: f32 = 4.0;
 const SPACING: f32 = 4.0;
 /// Width used when there is nothing to show.
 const EMPTY_WIDTH: f32 = 220.0;
+/// How long the bar must sit still before its position is written out.
+///
+/// Saving on every frame of a drag would hammer the disk; saving only on exit
+/// would lose the position whenever the process is killed rather than quit.
+const POSITION_SETTLE: Duration = Duration::from_millis(800);
 
 /// Height of the window before the first layout pass.
 pub const INITIAL_HEIGHT: f32 = BUTTON_HEIGHT + MARGIN * 2.0;
@@ -44,8 +51,10 @@ pub struct BarApp {
     wrap_at: u32,
     /// Last size we asked the window manager for, to avoid resizing every frame.
     requested_size: egui::Vec2,
-    /// Position observed on the previous frame, persisted on exit.
+    /// Position observed on the previous frame.
     position: Option<[f32; 2]>,
+    /// When the position last changed, so a move can be saved once it settles.
+    moved_at: Option<Instant>,
     /// `None` when the desktop offers no system tray.
     tray: Option<TrayHandle>,
     settings: SettingsWindow,
@@ -63,6 +72,7 @@ impl BarApp {
             wrap_at,
             requested_size: egui::Vec2::ZERO,
             position: None,
+            moved_at: None,
             tray,
             settings: SettingsWindow::default(),
             visible: true,
@@ -78,10 +88,24 @@ impl BarApp {
         for command in tray.drain() {
             match command {
                 TrayCommand::ShowSettings => {
-                    // Refresh the hotkey list every time it is opened; the
-                    // engine only learns it once registration has happened.
-                    let shortcuts = self.engine.with_state(|state| state.shortcuts.clone());
+                    // Seed both lists on open: the engine only learns the
+                    // shortcuts once registration has happened, and the tabs
+                    // change as clients come and go.
+                    let (shortcuts, tabs) = self.engine.with_state(|state| {
+                        let tabs = state
+                            .tabs
+                            .iter()
+                            .filter_map(|tab| {
+                                Some(TabRow {
+                                    account: tab.account?,
+                                    label: tab.label.clone(),
+                                })
+                            })
+                            .collect();
+                        (state.shortcuts.clone(), tabs)
+                    });
                     self.settings.set_shortcuts(shortcuts);
+                    self.settings.set_tabs(tabs);
                     self.settings.open();
                 }
                 TrayCommand::ToggleBar => {
@@ -115,10 +139,43 @@ impl BarApp {
         }
     }
 
-    /// Remembers where the user dragged the bar.
+    /// Remembers where the user dragged the bar, saving once it settles.
     fn track_position(&mut self, ctx: &egui::Context) {
-        if let Some(rect) = ctx.input(|i| i.viewport().outer_rect) {
-            self.position = Some([rect.min.x, rect.min.y]);
+        let Some(rect) = ctx.input(|i| i.viewport().outer_rect) else {
+            return;
+        };
+        let position = [rect.min.x, rect.min.y];
+
+        if self.position != Some(position) {
+            self.position = Some(position);
+            self.moved_at = Some(Instant::now());
+            // Wake up once the window has stopped moving, so the save happens
+            // even if nothing else asks for a repaint.
+            ctx.request_repaint_after(POSITION_SETTLE);
+            return;
+        }
+
+        let Some(moved_at) = self.moved_at else {
+            return;
+        };
+        if moved_at.elapsed() >= POSITION_SETTLE {
+            self.moved_at = None;
+            self.save_position();
+        }
+    }
+
+    /// Writes the current position out, unless it is already what we stored.
+    fn save_position(&mut self) {
+        let Some(position) = self.position else {
+            return;
+        };
+        if self.config.overlay_position == Some(position) {
+            return;
+        }
+
+        self.config.overlay_position = Some(position);
+        if let Err(error) = self.config.save() {
+            tracing::warn!(%error, "could not save the overlay position");
         }
     }
 
@@ -204,10 +261,17 @@ impl eframe::App for BarApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.handle_tray(ctx);
 
-        if self.settings.show(ctx, &mut self.config).layout_changed {
+        let outcome = self.settings.show(ctx, &mut self.config);
+        if outcome.layout_changed {
             let (orientation, wrap_at) = self.config.overlay_layout();
             self.orientation = orientation;
             self.wrap_at = wrap_at;
+        }
+        if outcome.config_changed {
+            // The worker builds the tab list, so it needs the new labels and
+            // order straight away rather than at the next restart.
+            self.engine
+                .send(Command::UpdateConfig(Box::new(self.config.clone())));
         }
 
         self.track_position(ctx);
@@ -256,18 +320,8 @@ impl eframe::App for BarApp {
         });
     }
 
-    /// Persists the bar position so it comes back where the user left it.
+    /// Catches a move that had not settled yet when the user quit.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let Some(position) = self.position else {
-            return;
-        };
-        if self.config.overlay_position == Some(position) {
-            return;
-        }
-
-        self.config.overlay_position = Some(position);
-        if let Err(error) = self.config.save() {
-            tracing::warn!(%error, "could not save the overlay position");
-        }
+        self.save_position();
     }
 }

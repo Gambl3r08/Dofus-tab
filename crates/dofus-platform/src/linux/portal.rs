@@ -221,7 +221,7 @@ impl HotkeyManager for PortalHotkeys {
         let shortcuts: Vec<(String, HashMap<String, OwnedValue>)> =
             Vec::try_from(listed.try_clone().map_err(portal_error)?).map_err(portal_error)?;
 
-        Ok(shortcuts
+        let mut registered: Vec<RegisteredShortcut> = shortcuts
             .into_iter()
             .filter_map(|(id, options)| {
                 let action = Action::from_id(&id)?;
@@ -230,7 +230,13 @@ impl HotkeyManager for PortalHotkeys {
                     trigger: trigger_description(&options),
                 })
             })
-            .collect())
+            .collect();
+
+        // The portal answers in whatever order its own storage happens to use,
+        // which is not slot order and looks like a bug to anyone reading it.
+        registered.sort_by_key(|shortcut| shortcut.action);
+
+        Ok(registered)
     }
 
     fn listen(&mut self, on_activated: &mut dyn FnMut(Action)) -> Result<()> {

@@ -28,6 +28,11 @@ pub enum Command {
     Focus(u32),
     /// Apply the overlay window hints to our own window.
     MakeOverlay(WindowId),
+    /// Adopt a config edited in the settings window.
+    ///
+    /// The worker keeps its own copy because it builds the tab list; without
+    /// this, a rename or a reorder would not show up until restart.
+    UpdateConfig(Box<Config>),
 }
 
 /// Snapshot the UI renders from.
@@ -159,6 +164,7 @@ fn run(inbox: Receiver<Command>, state: Arc<Mutex<EngineState>>, on_change: impl
 
         match inbox.recv_timeout(REFRESH_INTERVAL) {
             Ok(Command::Focus(slot)) => worker.focus(slot, &state),
+            Ok(Command::UpdateConfig(config)) => worker.config = *config,
             Ok(Command::MakeOverlay(window)) => {
                 if let Err(error) = worker.windows.make_overlay(window) {
                     tracing::warn!(%error, "could not make the bar an overlay");

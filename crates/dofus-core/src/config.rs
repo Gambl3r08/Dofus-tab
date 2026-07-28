@@ -99,6 +99,19 @@ impl Config {
         self.order = ids.into_iter().map(|id| id.0).collect();
     }
 
+    /// Moves `accounts` to the front of the saved order, in the order given.
+    ///
+    /// Accounts that were remembered but are not in `accounts` — typically ones
+    /// that are simply not logged in right now — keep their relative order
+    /// after them, so reordering the running clients never loses a preference
+    /// for an absent one.
+    pub fn reorder(&mut self, accounts: &[AccountId]) {
+        let moved: Vec<u64> = accounts.iter().map(|id| id.0).collect();
+        let rest = self.order.iter().copied().filter(|id| !moved.contains(id));
+
+        self.order = moved.iter().copied().chain(rest).collect();
+    }
+
     /// Overlay grid settings, defaults merged with the user's overrides.
     pub fn overlay_layout(&self) -> (Orientation, u32) {
         (
@@ -147,6 +160,46 @@ mod tests {
         assert_eq!(config.position(AccountId(30)), Some(0));
         assert_eq!(config.position(AccountId(10)), Some(1));
         assert_eq!(config.position(AccountId(99)), None);
+    }
+
+    #[test]
+    fn reorder_puts_the_given_accounts_first() {
+        let mut config = Config::default();
+        config.set_order([AccountId(1), AccountId(2), AccountId(3)]);
+
+        config.reorder(&[AccountId(3), AccountId(1)]);
+
+        assert_eq!(config.position(AccountId(3)), Some(0));
+        assert_eq!(config.position(AccountId(1)), Some(1));
+        assert_eq!(config.position(AccountId(2)), Some(2));
+    }
+
+    #[test]
+    fn reorder_keeps_accounts_that_are_not_running() {
+        let mut config = Config::default();
+        config.set_order([AccountId(10), AccountId(20), AccountId(30)]);
+
+        // Only 30 and 10 are logged in; 20 must survive the reorder.
+        config.reorder(&[AccountId(30), AccountId(10)]);
+
+        assert_eq!(config.order, vec![30, 10, 20]);
+    }
+
+    #[test]
+    fn reorder_accepts_accounts_not_seen_before() {
+        let mut config = Config::default();
+        config.reorder(&[AccountId(7), AccountId(8)]);
+        assert_eq!(config.order, vec![7, 8]);
+    }
+
+    #[test]
+    fn reorder_never_duplicates_an_account() {
+        let mut config = Config::default();
+        config.set_order([AccountId(1), AccountId(2)]);
+
+        config.reorder(&[AccountId(2), AccountId(1)]);
+
+        assert_eq!(config.order, vec![2, 1]);
     }
 
     #[test]

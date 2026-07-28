@@ -88,8 +88,11 @@ cargo run --release --bin dofus-tab-bar
 
 `dofus-tab-bar` is a thin always-on-top strip with one button per detected
 client. The tab of the focused client is highlighted, clicking a tab focuses it,
-and the dotted grip on the left drags the bar around — its position is
-remembered in the config. The same process also registers the global hotkeys, so
+and the dotted grip on the left drags the bar around.
+
+The position is remembered: it is written out once the bar has sat still for a
+moment after a move, not only when the application quits, so it survives a crash
+or a killed session as well as a clean exit. The same process also registers the global hotkeys, so
 one binary covers both ways of switching.
 
 The bar re-scans every 750 ms on a worker thread, so the UI never blocks on an
@@ -101,11 +104,21 @@ disappear on their own.
 The bar has no title bar and no taskbar entry, so the system tray is where it
 lives. Its menu offers **Settings**, **Show/hide bar** and **Quit**.
 
-Settings opens a second window with the layout controls, applied live as you
-change them, and a read-only list of the hotkeys with the trigger the desktop
-actually assigned to each one. Hotkeys are read-only on purpose: once registered
-they belong to the desktop, and on Linux the portal will not let an application
-reassign them, so an editable field would silently do nothing.
+Settings opens a second window with three sections:
+
+- **Tabs** — rename a tab, or move it up and down. Both are stored under the
+  account id, so they survive restarts; an empty name restores the launcher
+  nickname. Reordering only touches the accounts that are running, and keeps the
+  remembered position of any that are not.
+- **Layout** — direction and wrap point, applied to the bar as you change them,
+  with a preview of the resulting grid.
+- **Hotkeys** — read-only, showing the trigger the desktop actually assigned to
+  each slot. Read-only on purpose: once registered they belong to the desktop,
+  and on Linux the portal will not let an application reassign them, so an
+  editable field would silently do nothing.
+
+Edits reach the background worker immediately, so a rename or a reorder shows up
+in the bar without a restart.
 
 Linux uses the StatusNotifierItem D-Bus specification directly rather than
 `libappindicator`, which is not installed everywhere and would pull in GTK and a
@@ -380,6 +393,16 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 ```
 
+CI runs the tests and clippy **natively on Linux, Windows and macOS**. That
+matters more here than in most projects: the Windows and macOS backends are
+developed on Linux, so without native jobs they would only ever be type-checked.
+
+### Known constraint
+
+`dofus-tab daemon` and `dofus-tab-bar` both register the same global shortcuts,
+so running the two at once is not supported. Use the bar, which does everything
+the daemon does and adds the tray.
+
 Platform code that cannot be run locally is still type-checked and linted, which
 catches most of what compiling would:
 
@@ -405,7 +428,13 @@ All code, comments, documentation and tests are written in English.
 - [x] macOS window backend (AppKit) — written and cross-compiling, not yet run
 - [ ] Run and fix the macOS backend on real hardware
 - [ ] macOS global hotkeys (needs a main-thread run loop)
+- [x] CI building and testing natively on all three platforms
+- [x] Rename and reorder tabs from the settings window
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
+- [ ] Tray icon on Windows and macOS
+- [ ] Embed the `.ico` in the Windows executable
+- [ ] Autostart entry
+- [ ] Refuse to run the daemon while the bar is already running
 
 ## License
 
