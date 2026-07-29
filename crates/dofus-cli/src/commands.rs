@@ -337,3 +337,85 @@ fn report_hotkey_state() {
         Err(error) => println!("hotkeys           : could not list them ({error})"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dofus_core::WindowId;
+    use dofus_core::account::AccountId;
+
+    fn tab(slot: u32, label: &str) -> Tab {
+        Tab {
+            slot,
+            window: WindowId(u64::from(slot)),
+            pid: Some(slot),
+            account: Some(AccountId(u64::from(slot))),
+            label: label.to_string(),
+            title: "Dofus".to_string(),
+        }
+    }
+
+    fn tabs() -> Vec<Tab> {
+        vec![
+            tab(1, "totethedemon#1546"),
+            tab(2, "blackofdekilla#1535"),
+            tab(3, "Main Iop"),
+        ]
+    }
+
+    #[test]
+    fn a_number_selects_that_slot() {
+        let tabs = tabs();
+        let tab = resolve_target(&tabs, "2").expect("slot 2 exists");
+        assert_eq!(tab.label, "blackofdekilla#1535");
+    }
+
+    #[test]
+    fn a_slot_that_does_not_exist_is_reported_with_the_count() {
+        let error = resolve_target(&tabs(), "9").expect_err("slot 9 does not exist");
+        let message = error.to_string();
+        assert!(message.contains("slot 9"), "{message}");
+        assert!(
+            message.contains('3'),
+            "should say how many there are: {message}"
+        );
+    }
+
+    #[test]
+    fn a_substring_selects_by_label() {
+        let tabs = tabs();
+        let tab = resolve_target(&tabs, "dekilla").expect("one label contains it");
+        assert_eq!(tab.slot, 2);
+    }
+
+    #[test]
+    fn label_matching_ignores_case() {
+        let tabs = tabs();
+        assert_eq!(resolve_target(&tabs, "MAIN IOP").expect("matches").slot, 3);
+        assert_eq!(resolve_target(&tabs, "main").expect("matches").slot, 3);
+    }
+
+    #[test]
+    fn an_ambiguous_substring_is_refused_and_lists_the_candidates() {
+        // Both nicknames end in a discriminator, so "#15" hits two tabs.
+        let error = resolve_target(&tabs(), "#15").expect_err("two tabs match");
+        let message = error.to_string();
+
+        assert!(message.contains("ambiguous"), "{message}");
+        assert!(message.contains("totethedemon#1546"), "{message}");
+        assert!(message.contains("blackofdekilla#1535"), "{message}");
+    }
+
+    #[test]
+    fn a_substring_matching_nothing_is_refused() {
+        let error = resolve_target(&tabs(), "enutrof").expect_err("nothing matches");
+        assert!(error.to_string().contains("no tab matches"));
+    }
+
+    #[test]
+    fn a_number_is_never_treated_as_a_label() {
+        // Slot 1 is named after a number, but "2" must still mean slot 2.
+        let tabs = vec![tab(1, "2 is my lucky number"), tab(2, "second")];
+        assert_eq!(resolve_target(&tabs, "2").expect("slot 2").label, "second");
+    }
+}

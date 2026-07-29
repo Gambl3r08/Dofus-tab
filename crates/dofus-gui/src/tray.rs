@@ -89,6 +89,18 @@ pub fn spawn(repaint: impl Fn() + Send + Sync + 'static) -> Option<TrayHandle> {
     }
 }
 
+/// Reorders pixels from RGBA into ARGB32 in network byte order.
+///
+/// StatusNotifierItem wants the latter while the PNG decoder hands back the
+/// former. Getting it wrong shows a recognisable but wrongly tinted icon, which
+/// is easy to miss by eye and trivial to catch here.
+#[cfg(target_os = "linux")]
+fn to_argb32(rgba: &[u8]) -> Vec<u8> {
+    rgba.chunks_exact(4)
+        .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
+        .collect()
+}
+
 /// Decodes the embedded window icon into raw RGBA.
 fn icon_rgba() -> Option<(Vec<u8>, u32, u32)> {
     let icon = eframe::icon_data::from_png_bytes(crate::ICON_PNG)
@@ -159,23 +171,15 @@ mod imp {
         }
 
         /// Embedded fallback, so the icon still shows before installation.
-        ///
-        /// StatusNotifierItem wants ARGB32 in network byte order, while the
-        /// decoder hands back RGBA, so the channels are reordered here.
         fn icon_pixmap(&self) -> Vec<ksni::Icon> {
             let Some((rgba, width, height)) = super::icon_rgba() else {
                 return Vec::new();
             };
 
-            let data = rgba
-                .chunks_exact(4)
-                .flat_map(|pixel| [pixel[3], pixel[0], pixel[1], pixel[2]])
-                .collect();
-
             vec![ksni::Icon {
                 width: width as i32,
                 height: height as i32,
-                data,
+                data: super::to_argb32(&rgba),
             }]
         }
 
@@ -271,5 +275,46 @@ mod imp {
         _repaint: Box<dyn Fn() + Send + Sync>,
     ) -> Result<Backend, super::BuildError> {
         Err("the tray is not implemented on this platform".into())
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba_becomes_argb_in_network_byte_order() {
+        // One opaque red pixel: R=1, G=2, B=3, A=255.
+        let argb = to_argb32(&[1, 2, 3, 255]);
+        assert_eq!(argb, vec![255, 1, 2, 3]);
+    }
+
+    #[test]
+    fn transparency_survives_the_conversion() {
+        let argb = to_argb32(&[10, 20, 30, 0]);
+        assert_eq!(
+            argb[0], 0,
+            "a fully transparent pixel must stay transparent"
+        );
+    }
+
+    #[test]
+    fn every_pixel_is_converted() {
+        let rgba: Vec<u8> = (0..16).collect();
+        assert_eq!(to_argb32(&rgba).len(), rgba.len());
+    }
+
+    #[test]
+    fn a_trailing_partial_pixel_is_dropped_rather_than_misaligning_the_rest() {
+        // Five bytes is one pixel plus a stray byte; keeping it would shift
+        // every channel of whatever followed.
+        assert_eq!(to_argb32(&[1, 2, 3, 4, 5]), vec![4, 1, 2, 3]);
+    }
+
+    #[test]
+    fn the_embedded_icon_decodes_and_is_square() {
+        let (rgba, width, height) = icon_rgba().expect("the embedded icon should decode");
+        assert_eq!(width, height, "the tray expects a square icon");
+        assert_eq!(rgba.len(), (width * height * 4) as usize);
     }
 }

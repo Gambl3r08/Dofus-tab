@@ -50,6 +50,26 @@ const HOTKEY_POLL_INTERVAL: Duration = Duration::from_millis(30);
 /// Height of the window before the first layout pass.
 pub const INITIAL_HEIGHT: f32 = BUTTON_HEIGHT + MARGIN * 2.0;
 
+/// Window size that fits `grid` exactly, grip and margins included.
+///
+/// Kept apart from the drawing so it can be checked without a render context;
+/// getting it wrong shows up as a bar that clips its own buttons.
+fn content_size(grid: layout::Grid) -> egui::Vec2 {
+    if grid.is_empty() {
+        return egui::vec2(
+            GRIP_WIDTH + MARGIN * 3.0 + EMPTY_WIDTH,
+            BUTTON_HEIGHT + MARGIN * 2.0,
+        );
+    }
+
+    let columns = grid.columns as f32;
+    let rows = grid.rows as f32;
+    egui::vec2(
+        GRIP_WIDTH + MARGIN * 3.0 + columns * BUTTON_WIDTH + (columns - 1.0) * SPACING,
+        MARGIN * 2.0 + rows * BUTTON_HEIGHT + (rows - 1.0) * SPACING,
+    )
+}
+
 /// One tab, flattened out of the engine snapshot so the mutex is not held
 /// while drawing.
 struct TabView {
@@ -164,19 +184,7 @@ impl BarApp {
 
     /// Resizes the window so it fits the grid exactly.
     fn fit_to_content(&mut self, ctx: &egui::Context, grid: layout::Grid) {
-        let size = if grid.is_empty() {
-            egui::vec2(
-                GRIP_WIDTH + MARGIN * 3.0 + EMPTY_WIDTH,
-                BUTTON_HEIGHT + MARGIN * 2.0,
-            )
-        } else {
-            let columns = grid.columns as f32;
-            let rows = grid.rows as f32;
-            egui::vec2(
-                GRIP_WIDTH + MARGIN * 3.0 + columns * BUTTON_WIDTH + (columns - 1.0) * SPACING,
-                MARGIN * 2.0 + rows * BUTTON_HEIGHT + (rows - 1.0) * SPACING,
-            )
-        };
+        let size = content_size(grid);
 
         if (size - self.requested_size).length() > f32::EPSILON {
             self.requested_size = size;
@@ -369,5 +377,88 @@ impl eframe::App for BarApp {
     /// Catches a move that had not settled yet when the user quit.
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.save_position();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn size_for(count: usize, orientation: Orientation, wrap_at: u32) -> egui::Vec2 {
+        content_size(layout::grid(count, orientation, wrap_at))
+    }
+
+    /// Width of a row of `columns` buttons, grip and margins included.
+    fn expected_width(columns: f32) -> f32 {
+        GRIP_WIDTH + MARGIN * 3.0 + columns * BUTTON_WIDTH + (columns - 1.0) * SPACING
+    }
+
+    fn expected_height(rows: f32) -> f32 {
+        MARGIN * 2.0 + rows * BUTTON_HEIGHT + (rows - 1.0) * SPACING
+    }
+
+    #[test]
+    fn one_tab_is_one_button_tall_and_wide() {
+        let size = size_for(1, Orientation::Vertical, 4);
+        assert_eq!(size.x, expected_width(1.0));
+        assert_eq!(size.y, expected_height(1.0));
+    }
+
+    #[test]
+    fn a_vertical_bar_grows_downwards_not_sideways() {
+        let one = size_for(1, Orientation::Vertical, 4);
+        let four = size_for(4, Orientation::Vertical, 4);
+
+        assert_eq!(four.x, one.x, "four stacked tabs must not widen the bar");
+        assert!(four.y > one.y);
+        assert_eq!(four.y, expected_height(4.0));
+    }
+
+    #[test]
+    fn wrapping_adds_a_column_without_adding_rows() {
+        let four = size_for(4, Orientation::Vertical, 4);
+        let five = size_for(5, Orientation::Vertical, 4);
+
+        assert_eq!(five.x, expected_width(2.0));
+        assert_eq!(five.y, four.y, "the fifth tab starts a column, not a row");
+    }
+
+    #[test]
+    fn eight_tabs_stay_far_narrower_than_a_single_row() {
+        let grid = size_for(8, Orientation::Vertical, 4);
+        let single_row = size_for(8, Orientation::Horizontal, 99);
+
+        assert_eq!(grid.x, expected_width(2.0));
+        assert!(
+            grid.x < single_row.x / 2.0,
+            "the wrapping layout exists to avoid a thousand-pixel strip"
+        );
+    }
+
+    #[test]
+    fn a_horizontal_bar_grows_sideways() {
+        let size = size_for(8, Orientation::Horizontal, 4);
+        assert_eq!(size.x, expected_width(4.0));
+        assert_eq!(size.y, expected_height(2.0));
+    }
+
+    #[test]
+    fn an_empty_bar_still_has_room_for_its_message() {
+        let size = size_for(0, Orientation::Vertical, 4);
+        assert_eq!(size.x, GRIP_WIDTH + MARGIN * 3.0 + EMPTY_WIDTH);
+        assert_eq!(size.y, BUTTON_HEIGHT + MARGIN * 2.0);
+    }
+
+    #[test]
+    fn every_size_leaves_room_for_the_grip() {
+        for count in 0..=8usize {
+            for orientation in [Orientation::Vertical, Orientation::Horizontal] {
+                let size = size_for(count, orientation, 4);
+                assert!(
+                    size.x > GRIP_WIDTH && size.y >= BUTTON_HEIGHT,
+                    "{orientation:?} with {count} tabs collapsed to {size:?}"
+                );
+            }
+        }
     }
 }

@@ -13,8 +13,9 @@ them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
 > **Status:** v0. On Linux everything works end to end. The Windows and macOS
-> backends are written and cross-compile, but have not been run on those systems
-> yet; macOS additionally has no global hotkeys. See [Roadmap](#roadmap).
+> backends are complete and covered by CI on their own runners, but have not
+> been run on those systems by a human yet. On macOS the hotkeys live in the
+> overlay bar only, not the daemon. See [Roadmap](#roadmap).
 
 ## Scope
 
@@ -410,6 +411,12 @@ CI runs the tests and clippy **natively on Linux, Windows and macOS**. That
 matters more here than in most projects: the Windows and macOS backends are
 developed on Linux, so without native jobs they would only ever be type-checked.
 
+Platform code is exercised through fakes rather than the real system wherever
+possible: `Worker` takes its window backend and process inspector as trait
+objects so the tests can drive it without an X server, and the settings that
+touch the filesystem are split so their writing half can be pointed at a
+throwaway directory.
+
 ### One hotkey owner at a time
 
 `dofus-tab daemon` and `dofus-tab-bar` both register the same global shortcuts.
@@ -453,6 +460,7 @@ All code, comments, documentation and tests are written in English.
 - [x] Rename and reorder tabs from the settings window
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
 - [x] Tray icon on Windows and macOS
+- [x] Tests for the overlay bar and the command line
 - [ ] Embed the `.ico` in the Windows executable
 - [x] Autostart entry (Linux; Windows and macOS still to do)
 - [x] Refuse to register hotkeys twice at once
