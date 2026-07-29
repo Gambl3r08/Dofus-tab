@@ -12,10 +12,10 @@ It maps every running Dofus client to a numbered tab and lets you jump between
 them instantly. Unlike the existing tools it targets **Linux, Windows and
 macOS** from a single codebase.
 
-> **Status:** v0. On Linux everything works end to end. The Windows and macOS
-> backends are complete and covered by CI on their own runners, but have not
-> been run on those systems by a human yet. On macOS the hotkeys live in the
-> overlay bar only, not the daemon. See [Roadmap](#roadmap).
+> **Status:** v0. Linux and macOS work end to end and have been used on real
+> hardware. The Windows backend is complete and covered by CI on a Windows
+> runner, but nobody has run it yet. On macOS the hotkeys live in the overlay
+> bar only, not the daemon. See [Roadmap](#roadmap).
 
 ## Scope
 
@@ -28,6 +28,8 @@ and input broadcasting are not.
 
 Requires Rust 1.89 or newer — that is where the standard library gained the file
 locking used to stop two processes registering the hotkeys at once.
+
+### Linux
 
 ```sh
 ./packaging/install.sh
@@ -61,6 +63,29 @@ cargo build --release
 ./target/release/dofus-tab list        # command line
 ./target/release/dofus-tab-bar         # overlay bar (hotkeys will not register)
 ```
+
+### macOS
+
+```sh
+./packaging/install-macos.sh
+```
+
+That builds and assembles `~/Applications/DofusTab.app`, generating the icon set
+with `iconutil` along the way. Launch it from Spotlight or Launchpad.
+
+The bundle matters for more than tidiness: its `Info.plist` sets `LSUIElement`,
+which is what makes macOS treat Dofus-tab as a menu bar application rather than
+putting it in the Dock. A bare binary works for testing but behaves like an
+ordinary app.
+
+None of this needs permissions. `NSRunningApplication` and Carbon hotkeys were
+chosen precisely to avoid the Accessibility and Screen Recording prompts that a
+window-level approach would have required.
+
+### Windows
+
+No installer yet; build with `cargo build --release` and run
+`target\release\dofus-tab-bar.exe`.
 
 ## Usage
 
@@ -453,9 +478,10 @@ All code, comments, documentation and tests are written in English.
 - [x] Always-on-top overlay bar
 - [x] Windows backend (Win32) — written and cross-compiling, not yet run
 - [ ] Run and fix the Windows backend on real hardware
-- [x] macOS window backend (AppKit) — written and cross-compiling, not yet run
-- [ ] Run and fix the macOS backend on real hardware
+- [x] macOS window backend (AppKit)
+- [x] Run the macOS backend on real hardware
 - [x] macOS global hotkeys (bar only; the daemon has no run loop)
+- [x] macOS `.app` bundle installer
 - [x] CI building and testing natively on all three platforms
 - [x] Rename and reorder tabs from the settings window
 - [ ] Native Wayland backends (KWin, Hyprland, wlroots)
