@@ -14,13 +14,22 @@ ROOT="$(dirname "$HERE")"
 BIN_DIR="${XDG_BIN_HOME:-$HOME/.local/bin}"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}"
 
-echo "Building..."
-cargo build --release --manifest-path "$ROOT/Cargo.toml"
+# A release archive ships the binaries in a `bin` directory next to this script,
+# so it installs without a Rust toolchain. A checkout has no such directory and
+# builds instead.
+BIN_SRC="$HERE/bin"
+if [ -x "$BIN_SRC/dofus-tab" ] && [ -x "$BIN_SRC/dofus-tab-bar" ]; then
+  echo "Using the prebuilt binaries in $BIN_SRC"
+else
+  echo "Building..."
+  cargo build --release --manifest-path "$ROOT/Cargo.toml"
+  BIN_SRC="$ROOT/target/release"
+fi
 
 echo "Installing binaries into $BIN_DIR"
 mkdir -p "$BIN_DIR"
-install -m755 "$ROOT/target/release/dofus-tab" "$BIN_DIR/"
-install -m755 "$ROOT/target/release/dofus-tab-bar" "$BIN_DIR/"
+install -m755 "$BIN_SRC/dofus-tab" "$BIN_DIR/"
+install -m755 "$BIN_SRC/dofus-tab-bar" "$BIN_DIR/"
 
 echo "Installing icons into $DATA_DIR/icons"
 mkdir -p "$DATA_DIR/icons"

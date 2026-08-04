@@ -9,8 +9,17 @@ ROOT="$(dirname "$HERE")"
 DEST="$HOME/Applications/DofusTab.app"
 ICONS_DIR="$HERE/icons"
 
-echo "Building..."
-cargo build --release --manifest-path "$ROOT/Cargo.toml"
+# A release archive ships the binaries in a `bin` directory next to this script,
+# so it installs without a Rust toolchain. A checkout has no such directory and
+# builds instead.
+BIN_SRC="$HERE/bin"
+if [ -x "$BIN_SRC/dofus-tab" ] && [ -x "$BIN_SRC/dofus-tab-bar" ]; then
+  echo "Using the prebuilt binaries in $BIN_SRC"
+else
+  echo "Building..."
+  cargo build --release --manifest-path "$ROOT/Cargo.toml"
+  BIN_SRC="$ROOT/target/release"
+fi
 
 echo "Creating .app bundle at $DEST"
 rm -rf "$DEST"
@@ -18,8 +27,8 @@ mkdir -p "$DEST/Contents/MacOS"
 mkdir -p "$DEST/Contents/Resources"
 
 echo "Copying binaries …"
-install -m755 "$ROOT/target/release/dofus-tab-bar" "$DEST/Contents/MacOS/"
-install -m755 "$ROOT/target/release/dofus-tab" "$DEST/Contents/MacOS/"
+install -m755 "$BIN_SRC/dofus-tab-bar" "$DEST/Contents/MacOS/"
+install -m755 "$BIN_SRC/dofus-tab" "$DEST/Contents/MacOS/"
 
 echo "Generating AppIcon.icns …"
 ICONSET_DIR="$(mktemp -d)"

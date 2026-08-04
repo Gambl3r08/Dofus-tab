@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest something Dofus-tab should do
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: Dofus-tab switches focus between windows
+        and nothing else. Broadcasting keystrokes to several clients, automating
+        gameplay and reading game memory are out of scope permanently, not
+        merely unimplemented — see the Scope section of the README.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The situation, rather than the feature. It often has a shorter answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Where this matters — Linux, Windows, macOS, or all three.

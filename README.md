@@ -24,10 +24,37 @@ them. It deliberately does not broadcast input to several clients, automate
 gameplay, or read game memory. Multi-accounting is allowed by Ankama; automation
 and input broadcasting are not.
 
+Nothing here touches the game. It talks to the window manager and reads the
+Ankama Launcher's own files to work out which client belongs to which account —
+the same information the launcher already shows you.
+
+## Not affiliated with Ankama
+
+Dofus-tab is an unofficial, independent project, developed by players and not
+connected to Ankama in any way. It is not affiliated with, endorsed by,
+sponsored by or approved by Ankama Games.
+
+*Dofus*, *Ankama* and the Ankama Launcher are trademarks of Ankama, used here
+only to say what this program works with. All artwork in this repository —
+icons, banners — is original to the project; no game asset is redistributed.
+
+Ankama's terms are the authority on what is allowed with your accounts, not this
+README. If they ever say otherwise, they are right and this is wrong.
+
 ## Install
 
-Requires Rust 1.89 or newer — that is where the standard library gained the file
-locking used to stop two processes registering the hotkeys at once.
+The [releases page](https://github.com/Gambl3r08/Dofus-tab/releases) has an
+archive per platform, each holding the binaries and the installer below, so no
+Rust toolchain is needed. Building from a checkout does need one: **Rust 1.89 or
+newer**, which is where the standard library gained the file locking used to stop
+two processes registering the hotkeys at once.
+
+The binaries are not code-signed. macOS will refuse a downloaded archive until
+you clear the quarantine flag, `xattr -dr com.apple.quarantine`, and Windows
+SmartScreen will warn once. Building from source avoids both.
+
+The instructions below work either way: run the installer from the extracted
+archive, or from a checkout, where it builds first.
 
 ### Linux
 
@@ -84,8 +111,10 @@ window-level approach would have required.
 
 ### Windows
 
-No installer yet; build with `cargo build --release` and run
-`target\release\dofus-tab-bar.exe`.
+No installer yet. Extract the release archive and run `bin\dofus-tab-bar.exe`,
+or build from a checkout with `cargo build --release` and run
+`target\release\dofus-tab-bar.exe`. Nothing has to be installed for the global
+hotkeys to work — that requirement is specific to the Linux desktop portal.
 
 ## Usage
 
@@ -467,6 +496,16 @@ cargo clippy --workspace --all-targets --target aarch64-apple-darwin -- -D warni
 
 All code, comments, documentation and tests are written in English.
 
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the house style and what is in scope.
+Two things are wanted more than patches right now: someone running the Windows
+backend on real hardware, and native Wayland backends for the compositors where
+the game does not go through XWayland.
+
+Security reports go through [SECURITY.md](SECURITY.md), privately, rather than
+the issue tracker.
+
 ## Roadmap
 
 - [x] `dofus-core` domain model with account identity and stable ordering
@@ -507,3 +546,7 @@ it back to the same players.
 
 Using it, including in a commercial setting, costs nothing and requires nothing.
 The obligation only ever applies to whoever *distributes* a derivative.
+
+That licence covers this project's own code and artwork. It says nothing about
+Ankama's trademarks, which are not ours to license — see
+[Not affiliated with Ankama](#not-affiliated-with-ankama).

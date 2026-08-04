@@ -1,0 +1,153 @@
+# Builds the release archives and publishes them on a tag.
+#
+# The point is that a player should not need a Rust toolchain. Each archive is
+# the `packaging` directory plus a `bin` directory holding the binaries, so the
+# installers that live there run unchanged against prebuilt binaries.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The release is created as a draft, so there is a chance to read the notes
+# before anyone sees it.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built on the oldest supported runner rather than ubuntu-latest: the
+          # binary links against the glibc it was built with, so building on a
+          # newer image would refuse to start on stable distributions.
+          - name: linux-x86_64
+            os: ubuntu-22.04
+          - name: macos-universal
+            os: macos-latest
+          - name: windows-x86_64
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev pkg-config
+
+      # The version comes from the workspace manifest; the tag has to agree with
+      # it, or the archives would be named after a version nobody can build.
+      - name: Resolve the version
+        shell: bash
+        run: |
+          version=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match the workspace version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Build
+        if: runner.os != 'macOS'
+        run: cargo build --release --workspace
+
+      # One archive for both kinds of Mac. Building each target separately and
+      # gluing them with lipo is the supported way; a single `--target` build
+      # would leave Intel users without a download.
+      - name: Build (macOS universal)
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          cargo build --release --workspace --target aarch64-apple-darwin
+          cargo build --release --workspace --target x86_64-apple-darwin
+          mkdir -p target/release
+          for bin in dofus-tab dofus-tab-bar; do
+            lipo -create -output "target/release/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" \
+              "target/x86_64-apple-darwin/release/$bin"
+            lipo -info "target/release/$bin"
+          done
+
+      - name: Assemble the archive
+        shell: bash
+        run: |
+          stage="dofus-tab-v${VERSION}-${{ matrix.name }}"
+          mkdir -p "$stage/bin"
+          cp README.md LICENSE "$stage/"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/dofus-tab.exe target/release/dofus-tab-bar.exe "$stage/bin/"
+            7z a -tzip "$stage.zip" "$stage"
+          else
+            cp target/release/dofus-tab target/release/dofus-tab-bar "$stage/bin/"
+            # The installers expect the icons, the desktop entry and the
+            # Info.plist beside them, exactly as they sit in `packaging`.
+            cp -r packaging/. "$stage/"
+            rm -rf "$stage/banners"
+            chmod +x "$stage/bin/"* "$stage"/install*.sh
+            tar czf "$stage.tar.gz" "$stage"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            dofus-tab-v*.tar.gz
+            dofus-tab-v*.zip
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum ./* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          gh release create "$tag" \
+            --draft \
+            --title "$tag" \
+            --generate-notes \
+            artifacts/*

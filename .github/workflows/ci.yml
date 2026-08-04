@@ -6,6 +6,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Nothing here writes back to the repository, so the token gets read access and
+# no more. Worth being explicit once the repository is public and CI runs on
+# pull requests from strangers.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 

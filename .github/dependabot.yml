@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Grouped and monthly on purpose. A window switcher does not need a pull
+  # request for every patch release of a transitive crate, and a single grouped
+  # update is one CI run across three platforms rather than a dozen.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,3 @@
+# Same person, same address, two capitalisations — without this git counts them
+# as two contributors.
+Roberto Lozada <Robertojoselozada@gmail.com> <robertojoselozada@gmail.com>

@@ -1,0 +1,7 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Shortcuts registered but nothing happens
+    url: https://github.com/Gambl3r08/Dofus-tab#troubleshooting-registered-but-inert
+    about: >
+      The commonest problem on KDE, and it has a known cause and fix. Please read
+      this before opening an issue.
